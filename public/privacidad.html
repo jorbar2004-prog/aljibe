@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de privacidad</title>
+<style>
+  :root { --bg:#f6f4ef; --surface:#fff; --line:#e0dbcf; --text:#1d2420; --muted:#6a7068; --accent:#1f6f5c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121715; --surface:#1a211e; --line:#2c3631; --text:#e7ece8; --muted:#8e9992; --accent:#4cc2a1; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 64px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:24px; }
+  h1 { margin:0 0 4px; font-size:26px; letter-spacing:-.02em; }
+  h2 { margin:28px 0 6px; font-size:18px; }
+  p, li { margin:6px 0; }
+  .muted { color:var(--muted); font-size:14px; }
+  a { color:var(--accent); }
+  nav { margin-bottom:14px; }
+</style>
+</head>
+<body>
+<main>
+<nav><a href="/">← Volver a Aljibe</a></nav>
+<div class="card">
+<h1>Política de privacidad</h1>
+<p class="muted">Aljibe · Última actualización: octubre de 2026</p>
+
+<h2>Qué es Aljibe</h2>
+<p>Aljibe es un servicio privado, al que se entra solo por invitación, que permite guardar archivos repartiéndolos entre las cuentas de Google Drive que cada persona conecta. Lo administra una persona, no una empresa.</p>
+
+<h2>Qué datos se tratan</h2>
+<ul>
+  <li><strong>Tu cuenta de Aljibe:</strong> tu email y tu contraseña, esta última guardada solo como un hash (nunca en texto legible).</li>
+  <li><strong>Cada cuenta de Google que conectás:</strong> su dirección de email y un token de acceso que Aljibe guarda <strong>cifrado</strong> para poder operar en ese Drive en tu nombre.</li>
+  <li><strong>Información de tus archivos:</strong> nombre, tamaño, tipo, la carpeta virtual donde los ves y en qué cuenta quedó cada parte.</li>
+  <li><strong>Una cookie de sesión</strong>, necesaria para mantenerte conectado. No se usan cookies de publicidad ni de seguimiento.</li>
+</ul>
+
+<h2>Qué acceso pide a tu Google Drive</h2>
+<p>Aljibe solicita únicamente el permiso <code>drive.file</code>. Con él, Aljibe solo puede ver, crear, modificar y borrar los archivos que ella misma creó, dentro de una carpeta llamada «Aljibe». <strong>No puede ver ni tocar el resto de tu Drive.</strong></p>
+
+<h2>Qué pasa con el contenido de tus archivos</h2>
+<p>Al subir o descargar, los archivos pasan por los servidores de Aljibe (alojados en Cloudflare) solo mientras dura la transferencia. Aljibe no guarda copias: el contenido vive en tu Google Drive. Aljibe no cifra el contenido de los archivos.</p>
+
+<h2>Para qué se usan los datos</h2>
+<p>Solo para que el servicio funcione: subir, listar, descargar y borrar tus archivos. No se venden, no se comparten con terceros, no se usan para publicidad ni para entrenar modelos de inteligencia artificial.</p>
+<p>El uso y la transferencia a cualquier otra app de la información recibida de las APIs de Google se ajustará a la <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Política de datos de usuario de los servicios de API de Google</a>, incluidos los requisitos de uso limitado.</p>
+
+<h2>Con quién se relacionan los datos</h2>
+<ul>
+  <li><strong>Google</strong>, donde están tus archivos.</li>
+  <li><strong>Cloudflare</strong>, que aloja la aplicación y su base de datos.</li>
+</ul>
+<p>Quien administra Aljibe ve en su panel los emails de los usuarios y totales de uso (cantidad de cuentas, de archivos y tamaño). Por tener acceso a la infraestructura, técnicamente también podría consultar la base de datos, que incluye los nombres de archivo, y descifrar los tokens de acceso, que alcanzan solo a la carpeta «Aljibe» de cada Drive.</p>
+
+<h2>Cómo borrar tus datos o revocar el acceso</h2>
+<ul>
+  <li>Desde Aljibe podés quitar una cuenta de Google conectada: se revoca el acceso y se elimina el token.</li>
+  <li>Podés revocar el acceso de Aljibe en cualquier momento desde <a href="https://myaccount.google.com/permissions" rel="noopener">myaccount.google.com/permissions</a>.</li>
+  <li>Si le pedís a quien administra el servicio que te quite, se borran tus datos de Aljibe (cuenta, tokens e información de archivos). <strong>Los archivos guardados siguen estando en tu Google Drive</strong>, en la carpeta «Aljibe».</li>
+</ul>
+
+<h2>Contacto</h2>
+<p>Para cualquier consulta o pedido sobre tus datos, comunicate con la persona que te envió la invitación a Aljibe, que es quien administra el servicio.</p>
+
+<p class="muted">Si esta política cambia, se actualizará en esta página.</p>
+</div>
+</main>
+</body>
+</html>

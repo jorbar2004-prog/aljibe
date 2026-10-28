@@ -71,6 +71,8 @@
   .arow .acts { display: flex; gap: 4px; flex-wrap: wrap; }
   .sub { padding: 10px 16px 6px; color: var(--muted); font-size: 13px; font-weight: 600; border-top: 1px solid var(--line); }
   .banner span { overflow-wrap: anywhere; }
+  .legal { text-align: center; font-size: 13px; color: var(--muted); margin: 14px 0 0; }
+  .legal a { color: var(--muted); }
   dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: min(340px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.45); }
   dialog h3 { margin: 0 0 12px; }
@@ -173,6 +175,7 @@
       <button class="btn primary" type="submit">Crear mi cuenta</button>
     </form>
     <p class="err" id="loginErr" role="alert"></p>
+    <p class="legal"><a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
   </div>
 </div>
 
@@ -222,6 +225,7 @@
     <div class="drop" id="drop">Arrastrá archivos acá para subirlos a esta carpeta</div>
     <div class="list" id="list"></div>
   </section>
+  <p class="legal"><a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 </div>
 
 <dialog id="pwDialog">
