@@ -47,18 +47,35 @@
 
   /* login */
   .login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
-  .login form {
+  .login .box {
     width: 100%; max-width: 340px; background: var(--surface); border: 1px solid var(--line);
     border-radius: 16px; padding: 28px; box-shadow: var(--shadow);
   }
   .login h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.02em; }
   .login p { margin: 0 0 20px; color: var(--muted); }
-  input[type=password], input[type=search], input[type=text] {
+  input[type=password], input[type=search], input[type=text], input[type=email] {
     width: 100%; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line);
     background: var(--bg);
   }
   .login .btn { width: 100%; justify-content: center; margin-top: 12px; }
   .err { color: var(--danger); margin: 10px 0 0; min-height: 1.3em; font-size: 14px; }
+  .login .err { margin: 10px 0 0; }
+  .login form input + input { margin-top: 8px; }
+  .tabs { display: flex; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
+  .tabs button { flex: 1; border: 0; background: none; padding: 7px 8px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 600; }
+  .tabs button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+  .arow { display: flex; gap: 10px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .arow:last-child { border-bottom: 0; }
+  .arow .nm { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .arow .where { color: var(--muted); font-size: 12px; }
+  .arow .acts { display: flex; gap: 4px; flex-wrap: wrap; }
+  .sub { padding: 10px 16px 6px; color: var(--muted); font-size: 13px; font-weight: 600; border-top: 1px solid var(--line); }
+  .banner span { overflow-wrap: anywhere; }
+  dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: min(340px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h3 { margin: 0 0 12px; }
+  dialog input + input { margin-top: 8px; }
+  .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
   /* cabecera */
   header.top { display: flex; align-items: center; gap: 12px; padding: 18px 0 10px; flex-wrap: wrap; }
@@ -137,14 +154,26 @@
 <body>
 
 <div id="login" class="login" hidden>
-  <form id="loginForm">
+  <div class="box">
     <h1>Aljibe</h1>
     <p>Tus cuentas de Drive, juntas.</p>
-    <label for="pw" class="sr" style="position:absolute;left:-9999px">Contraseña</label>
-    <input id="pw" type="password" placeholder="Contraseña" autocomplete="current-password" autofocus>
-    <button class="btn primary" type="submit">Entrar</button>
+    <div class="tabs">
+      <button type="button" id="tabIn" class="on">Entrar</button>
+      <button type="button" id="tabUp">Tengo una invitación</button>
+    </div>
+    <form id="loginForm">
+      <input id="liEmail" type="email" placeholder="Email" aria-label="Email" autocomplete="username" required>
+      <input id="liPw" type="password" placeholder="Contraseña" aria-label="Contraseña" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Entrar</button>
+    </form>
+    <form id="regForm" hidden>
+      <input id="regCode" type="text" placeholder="Código de invitación" aria-label="Código de invitación" autocomplete="off" required>
+      <input id="regEmail" type="email" placeholder="Email" aria-label="Email" autocomplete="username" required>
+      <input id="regPw" type="password" placeholder="Contraseña (mínimo 8 caracteres)" aria-label="Contraseña" autocomplete="new-password" minlength="8" required>
+      <button class="btn primary" type="submit">Crear mi cuenta</button>
+    </form>
     <p class="err" id="loginErr" role="alert"></p>
-  </form>
+  </div>
 </div>
 
 <div id="app" class="wrap" hidden>
@@ -153,8 +182,10 @@
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c3 4 6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 3-6 6-10z"/></svg>
       Aljibe
     </div>
+    <span class="total" id="who"></span>
     <span class="total" id="total"></span>
     <button class="btn small" id="reindex" title="Reconstruye el índice leyendo lo que hay realmente en cada Drive">Reindexar</button>
+    <button class="btn small" id="chpw">Contraseña</button>
     <button class="btn small" id="logout">Salir</button>
   </header>
 
@@ -167,6 +198,16 @@
       <a class="btn small primary" href="/api/google/connect">+ Conectar cuenta</a>
     </div>
     <div id="accounts" class="accounts"></div>
+  </section>
+
+  <section class="card" id="admin" hidden>
+    <div class="card-head">
+      <h2>Usuarios e invitaciones</h2>
+      <button class="btn small primary" id="newInvite">+ Crear invitación</button>
+    </div>
+    <div id="users"></div>
+    <div class="sub">Invitaciones</div>
+    <div id="invites"></div>
   </section>
 
   <section class="card">
@@ -183,6 +224,19 @@
   </section>
 </div>
 
+<dialog id="pwDialog">
+  <form id="pwForm">
+    <h3>Cambiar contraseña</h3>
+    <input id="pwCur" type="password" placeholder="Contraseña actual" aria-label="Contraseña actual" autocomplete="current-password" required>
+    <input id="pwNew" type="password" placeholder="Nueva contraseña (mínimo 8)" aria-label="Nueva contraseña" autocomplete="new-password" minlength="8" required>
+    <p class="err" id="pwErr" role="alert"></p>
+    <div class="dlg-actions">
+      <button class="btn" type="button" id="pwCancel">Cancelar</button>
+      <button class="btn primary" type="submit">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="queue" id="queue" hidden>
   <div class="card">
     <div class="card-head"><h2>Subidas</h2><button class="btn small ghost" id="clearQ">Limpiar</button></div>
@@ -193,7 +247,7 @@
 <script>
 'use strict';
 const $ = (s) => document.querySelector(s);
-const state = { files: [], folders: [], accounts: [], path: '', q: '' };
+const state = { files: [], folders: [], accounts: [], path: '', q: '', user: null };
 
 // ── helpers ──
 function h(tag, attrs, ...kids) {
@@ -224,7 +278,7 @@ async function api(path, opts = {}) {
   const o = { method: 'GET', ...opts, headers: { 'X-Requested-With': 'aljibe', ...(opts.headers || {}) } };
   if (opts.json !== undefined) { o.body = JSON.stringify(opts.json); o.headers['Content-Type'] = 'application/json'; delete o.json; }
   const r = await fetch('/api/' + path, o);
-  if (r.status === 401 && path !== 'login') { showLogin(); throw new Error('Sesión vencida'); }
+  if (r.status === 401 && !['login', 'register', 'password'].includes(path)) { showLogin(); throw new Error('Sesión vencida'); }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || 'Error ' + r.status);
   return data;
@@ -238,23 +292,122 @@ function banner(kind, text) {
 const fail = (e) => banner('bad', e.message || String(e));
 
 // ── sesión ──
-function showLogin() { $('#app').hidden = true; $('#login').hidden = false; $('#pw').focus(); }
+const params = new URLSearchParams(location.search);
+function setTab(t) {
+  $('#loginForm').hidden = t !== 'in'; $('#regForm').hidden = t !== 'up';
+  $('#tabIn').classList.toggle('on', t === 'in'); $('#tabUp').classList.toggle('on', t === 'up');
+  $('#loginErr').textContent = '';
+}
+$('#tabIn').onclick = () => setTab('in');
+$('#tabUp').onclick = () => setTab('up');
+function showLogin() {
+  $('#app').hidden = true; $('#login').hidden = false;
+  const inv = params.get('invite');
+  setTab(inv ? 'up' : 'in');
+  if (inv) $('#regCode').value = inv;
+}
 async function boot() {
-  try { await api('me'); } catch { return showLogin(); }
+  let me;
+  try { me = await api('me'); } catch { return showLogin(); }
+  state.user = me.user;
   $('#login').hidden = true; $('#app').hidden = false;
-  const p = new URLSearchParams(location.search);
-  if (p.get('connected')) banner('ok', 'Cuenta conectada: ' + p.get('connected'));
-  if (p.get('error')) banner('bad', p.get('error'));
-  if (p.toString()) history.replaceState(null, '', '/');
-  await Promise.all([loadAccounts(), loadTree()]);
+  $('#who').textContent = me.user.email;
+  $('#admin').hidden = !me.user.is_admin;
+  if (params.get('connected')) banner('ok', 'Cuenta conectada: ' + params.get('connected'));
+  if (params.get('error')) banner('bad', params.get('error'));
+  if (params.toString()) { history.replaceState(null, '', '/'); for (const k of [...params.keys()]) params.delete(k); }
+  await Promise.all([loadAccounts(), loadTree(), loadAdmin()]);
 }
 $('#loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  $('#loginErr').textContent = '';
-  try { await api('login', { method: 'POST', json: { password: $('#pw').value } }); $('#pw').value = ''; boot(); }
-  catch (err) { $('#loginErr').textContent = err.message; }
+  e.preventDefault(); $('#loginErr').textContent = '';
+  try {
+    await api('login', { method: 'POST', json: { email: $('#liEmail').value, password: $('#liPw').value } });
+    $('#liPw').value = ''; boot();
+  } catch (err) { $('#loginErr').textContent = err.message; }
 });
-$('#logout').onclick = async () => { await api('logout', { method: 'POST' }).catch(() => {}); showLogin(); };
+$('#regForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('#loginErr').textContent = '';
+  try {
+    await api('register', { method: 'POST', json: { email: $('#regEmail').value, password: $('#regPw').value, code: $('#regCode').value } });
+    $('#regPw').value = ''; boot();
+  } catch (err) { $('#loginErr').textContent = err.message; }
+});
+$('#logout').onclick = async () => { await api('logout', { method: 'POST' }).catch(() => {}); location.replace('/'); };
+
+// ── cambiar contraseña ──
+$('#chpw').onclick = () => { $('#pwCur').value = ''; $('#pwNew').value = ''; $('#pwErr').textContent = ''; $('#pwDialog').showModal(); $('#pwCur').focus(); };
+$('#pwCancel').onclick = () => $('#pwDialog').close();
+$('#pwForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('#pwErr').textContent = '';
+  try {
+    await api('password', { method: 'POST', json: { current: $('#pwCur').value, next: $('#pwNew').value } });
+    $('#pwDialog').close(); banner('ok', 'Contraseña actualizada');
+  } catch (err) { $('#pwErr').textContent = err.message; }
+});
+
+// ── administración ──
+async function loadAdmin() {
+  if (!state.user?.is_admin) return;
+  try {
+    const [u, i] = await Promise.all([api('admin/users'), api('admin/invites')]);
+    renderUsers(u.users); renderInvites(i.invites);
+  } catch (e) { fail(e); }
+}
+function renderUsers(users) {
+  const box = $('#users'); box.replaceChildren();
+  for (const u of users) {
+    box.append(h('div', { class: 'arow' },
+      h('div', { class: 'nm' }, u.email, u.is_admin ? h('span', { class: 'tag' }, 'admin') : null,
+        h('div', { class: 'where' }, `${u.naccounts} ${u.naccounts === 1 ? 'cuenta' : 'cuentas'} · ${u.nfiles} ${u.nfiles === 1 ? 'archivo' : 'archivos'} · ${fmtSize(u.bytes)}`)),
+      h('div', { class: 'acts' }, u.id === state.user.id ? null : [
+        h('button', { class: 'btn small', onclick: () => resetUser(u) }, 'Nueva contraseña'),
+        h('button', { class: 'btn small danger', onclick: () => removeUser(u) }, 'Quitar')])));
+  }
+}
+const inviteLink = (code) => location.origin + '/?invite=' + encodeURIComponent(code);
+function renderInvites(list) {
+  const box = $('#invites'); box.replaceChildren();
+  if (!list.length) box.append(h('div', { class: 'none' }, 'Todavía no creaste invitaciones.'));
+  const t = Math.floor(Date.now() / 1000);
+  for (const i of list) {
+    const used = !!i.used_at, expired = !used && i.expires_at < t;
+    const st = used ? `Usada por ${i.used_by_email || 'un usuario ya quitado'}` : expired ? 'Vencida' : `Vence el ${fmtDate(i.expires_at)}`;
+    box.append(h('div', { class: 'arow' },
+      h('div', { class: 'nm' }, h('code', {}, i.code.slice(0, 8) + '…'), h('div', { class: 'where' }, st)),
+      h('div', { class: 'acts' },
+        !used && !expired ? h('button', { class: 'btn small', onclick: () => copyLink(i.code) }, 'Copiar enlace') : null,
+        !used ? h('button', { class: 'btn small danger', onclick: () => delInvite(i.code) }, 'Borrar') : null)));
+  }
+}
+async function copyLink(code) {
+  const link = inviteLink(code);
+  try { await navigator.clipboard.writeText(link); banner('ok', 'Enlace copiado: ' + link); }
+  catch { prompt('Copiá el enlace de invitación:', link); }
+}
+$('#newInvite').onclick = async () => {
+  try {
+    const r = await api('admin/invites', { method: 'POST', json: { days: 7 } });
+    const link = inviteLink(r.code);
+    let copied = false;
+    try { await navigator.clipboard.writeText(link); copied = true; } catch { /* se muestra igual */ }
+    banner('info', `Invitación creada (vale ${r.days} días${copied ? ', ya copiada al portapapeles' : ''}). Enlace: ${link}`);
+    loadAdmin();
+  } catch (e) { fail(e); }
+};
+async function delInvite(code) {
+  try { await api('admin/invites/' + encodeURIComponent(code), { method: 'DELETE', json: {} }); loadAdmin(); } catch (e) { fail(e); }
+}
+async function resetUser(u) {
+  if (!confirm(`¿Generar una contraseña temporal para ${u.email}? Se cierra su sesión actual.`)) return;
+  try {
+    const r = await api(`admin/users/${u.id}/reset`, { method: 'POST', json: {} });
+    banner('info', `Contraseña temporal de ${r.email}: ${r.password} — pasásela y que la cambie desde "Contraseña".`);
+  } catch (e) { fail(e); }
+}
+async function removeUser(u) {
+  if (!confirm(`¿Quitar a ${u.email}? Se borran sus datos de Aljibe y se revoca el acceso a sus cuentas de Google. Los archivos que guardó siguen en sus propios Drives (carpeta "Aljibe").`)) return;
+  try { await api('admin/users/' + u.id, { method: 'DELETE', json: {} }); banner('ok', 'Usuario quitado'); loadAdmin(); } catch (e) { fail(e); }
+}
 
 // ── cuentas ──
 async function loadAccounts(refresh) {
