@@ -1,17 +1,21 @@
 # Aljibe
 
-Un panel personal que junta varias cuentas de Google Drive en una sola. Subís un archivo y Aljibe elige en qué cuenta guardarlo; si no entra entero en ninguna, lo parte y reparte los trozos entre varias. Al descargar los vuelve a unir en streaming.
+Un panel que junta varias cuentas de Google Drive en una sola. Subís un archivo y Aljibe elige en qué cuenta guardarlo; si no entra entero en ninguna, lo parte y reparte los trozos entre varias. Al descargar los vuelve a unir en streaming.
+
+Pensado para un **grupo chico de gente conocida**: cada persona tiene su usuario y conecta *sus propias* cuentas de Google. El administrador reparte invitaciones.
 
 **Stack:** un solo `public/index.html` + una Pages Function (`functions/api/[[path]].js`) + D1 (SQLite) en Cloudflare. Sin servidor propio.
 
-## Qué hace distinto de 9drive
+## Qué hace
 
-- Archivos grandes **repartidos en varias cuentas** (chunking), con descarga transparente y soporte de `Range` (sirve para ver videos y retomar descargas).
-- Subida **reanudable** por bloques de 8 MB: si se corta, reintenta desde donde quedó.
+- Archivos grandes **repartidos en varias cuentas**, con descarga transparente y soporte de `Range` (sirve para ver videos y retomar descargas).
+- Subida **reanudable** por bloques de 8 MB, con reintentos si se corta la conexión.
 - Permiso mínimo de Google (`drive.file`): Aljibe solo ve lo que ella misma creó, no el resto de tu Drive.
-- **Reindexar**: cada parte guarda en Drive (campo `description`) los datos para reconstruirla. Si perdés la base D1, un botón recupera archivos, carpetas virtuales y nombres leyendo los Drives (con el nombre y la carpeta que tenían **al subirse**: los cambios hechos después con Renombrar/Mover solo viven en D1).
-- Los refresh tokens se guardan **cifrados** (AES-GCM).
-- Sin registro de usuarios: una sola contraseña, pensada para uso personal.
+- **Reindexar**: cada parte guarda en Drive los datos para reconstruirla. Si se pierde la base D1, un botón recupera archivos y carpetas virtuales leyendo los Drives (con el nombre y la carpeta que tenían **al subirse**; los cambios hechos después con Renombrar/Mover solo viven en D1).
+- **Varios usuarios con invitación.** Datos completamente separados: nadie ve ni toca los archivos, carpetas o cuentas de otro. Una cuenta de Google solo puede estar conectada a un usuario.
+- Panel de administración: crear invitaciones (de un solo uso, vencen a los 7 días), ver usuarios y su uso, generar una contraseña temporal, quitar usuarios.
+- Contraseñas con PBKDF2-SHA256 + sal, bloqueo de 15 minutos tras 5 intentos fallidos, y las sesiones se invalidan al cambiar la contraseña.
+- Los tokens de Google se guardan **cifrados** (AES-GCM).
 
 ## Estructura
 
@@ -26,11 +30,12 @@ aljibe/
 ## Puesta en marcha
 
 ### 1. Subir el proyecto a GitHub
-Creá un repositorio nuevo (puede ser privado) y subí estos archivos tal cual, respetando las carpetas.
+Subí estos archivos a un repositorio, **en la raíz** (que queden `public/`, `functions/api/[[path]].js`, `schema.sql`). Cuidá que el archivo de la API conserve los corchetes en el nombre.
 
 ### 2. Crear la base D1
 Cloudflare → **Workers & Pages → D1 → Create database** (nombre: `aljibe`).
-Abrí la pestaña **Console**, pegá el contenido de `schema.sql` y ejecutalo.
+Abrí la pestaña **Console**, pegá el contenido de `schema.sql` y ejecutalo. Si no acepta todo junto, pegá las sentencias de a una (cada `CREATE TABLE` / `CREATE INDEX` es una).
+Comprobá con `SELECT name FROM sqlite_master WHERE type='table';`: tienen que aparecer `users`, `invites`, `accounts`, `files`, `parts` y `folders`.
 
 ### 3. Crear el proyecto en Pages
 Cloudflare → **Workers & Pages → Create → Pages → Connect to Git** → elegí el repo.
@@ -44,12 +49,14 @@ Al terminar te da una URL del estilo `https://aljibe-xxx.pages.dev`. Anotala.
 En [Google Cloud Console](https://console.cloud.google.com/):
 1. Creá un proyecto nuevo.
 2. **APIs y servicios → Biblioteca** → habilitá **Google Drive API**.
-3. **Pantalla de consentimiento de OAuth** → tipo *Externo*. Completá nombre y email. En **Permisos** agregá `.../auth/drive.file`.
+3. **Pantalla de consentimiento de OAuth** → tipo *Externo*. Completá nombre de la app y email de contacto. En **Permisos** agregá `.../auth/drive.file`.
 4. **Credenciales → Crear credenciales → ID de cliente de OAuth** → tipo *Aplicación web*.
    En **URI de redireccionamiento autorizados** poné exactamente:
    `https://TU-URL.pages.dev/api/google/callback`
 5. Copiá el *Client ID* y el *Client secret*.
-6. **Importante:** en la pantalla de consentimiento pasá el estado de *Testing* a ***En producción*** (botón "Publicar app"). Si queda en Testing, Google vence los tokens a los 7 días y tenés que reconectar todo. Al ser solo para vos, no hace falta verificación: al conectar cada cuenta aparece el aviso "Google no verificó esta app" → *Avanzado → Ir a Aljibe*.
+6. **Importante:** en la pantalla de consentimiento pasá el estado de *Testing* a ***En producción*** ("Publicar app"). Si queda en *Testing*, Google vence los tokens a los 7 días y solo deja entrar a los usuarios de prueba que cargues a mano (hasta 100).
+
+Sobre la verificación de Google: según su documentación, `drive.file` es un permiso **no sensible**, que solo requiere la verificación básica de la app. Para un grupo chico podés dejar la app sin verificar; es posible que cada persona vea el aviso "Google no verificó esta app" al conectar su cuenta (*Avanzado → Ir a Aljibe*). Si más adelante querés quitar ese aviso, hay que hacer la verificación básica (pide página de inicio, política de privacidad y dominio propio).
 
 Si usás un dominio propio, agregá también su URI de redirección.
 
@@ -63,34 +70,62 @@ En tu proyecto de Pages → **Settings**:
 
 | Nombre | Valor |
 |---|---|
-| `APP_PASSWORD` | la contraseña con la que vas a entrar |
+| `ADMIN_CODE` | un código largo y aleatorio (20+ caracteres). Sirve **una sola vez**, para crear al administrador |
 | `SESSION_SECRET` | una cadena larga y aleatoria (mínimo 16 caracteres, mejor 40+) |
 | `GOOGLE_CLIENT_ID` | el Client ID |
 | `GOOGLE_CLIENT_SECRET` | el Client secret |
+| `PBKDF2_ITERATIONS` | *(opcional)* por defecto 100000. Ver "Límites" |
 
 Después hacé un **nuevo deploy** (Deployments → Retry deployment) para que tome las variables.
 
-> ⚠️ No cambies `SESSION_SECRET` después de conectar cuentas: con él se cifran los tokens y habría que reconectarlas.
+> ⚠️ No cambies `SESSION_SECRET` después de que haya gente conectada: con él se cifran los tokens de Google y habría que reconectar todas las cuentas.
 
-### 6. Usarlo
-Entrá a tu URL, ingresá la contraseña y tocá **+ Conectar cuenta** por cada cuenta de Google. Listo.
+### 6. Crear al administrador y empezar
+1. Entrá a tu URL → pestaña **Tengo una invitación** → poné como código tu `ADMIN_CODE`, tu email y una contraseña. Esa cuenta queda como administradora.
+2. Conectá tus cuentas de Google con **+ Conectar cuenta**.
+3. Para sumar gente: en **Usuarios e invitaciones** tocá **+ Crear invitación**. Se copia un enlace; mandáselo a la persona. Al abrirlo ya aparece el formulario de registro con el código cargado.
 
 ## Cómo funciona por dentro
 
 - En cada Drive se crea una carpeta `Aljibe`. Los archivos van ahí (los que se parten se llaman `nombre.part001`, `.part002`…).
 - Las carpetas que ves en la app son **virtuales** (viven en D1), no existen en Drive.
 - Para subir, el navegador manda bloques de 8 MB a `/api/upload/block`; la función los reenvía a una sesión de subida reanudable de Google. Los archivos nunca se guardan en Cloudflare.
-- Para elegir cuenta: usa la que más espacio libre tenga (dejando 16 MB de margen). Si el archivo no entra en una sola, lo reparte de mayor a menor espacio libre.
+- Para elegir cuenta usa la que más espacio libre tenga (dejando 16 MB de margen), **solo entre las cuentas del propio usuario**. Si el archivo no entra en una sola, lo reparte de mayor a menor espacio libre.
+
+## Privacidad: qué puede ver quien administra
+
+Si invitás gente, conviene que lo sepan:
+- El panel de administración muestra emails y totales (cuentas, cantidad de archivos, tamaño). No muestra nombres ni contenido.
+- Pero quien administra el despliegue (acceso a Cloudflare y a sus secretos) técnicamente puede leer la base —que incluye nombres de archivos— y descifrar los tokens de Google, que dan acceso a la carpeta `Aljibe` de cada persona (solo a lo que Aljibe creó).
+- El contenido de los archivos **no está cifrado** en Drive.
+
+Quitar a un usuario revoca el acceso de Aljibe a sus cuentas de Google y borra sus datos de la base. **Sus archivos siguen en sus propios Drives** (carpeta `Aljibe`).
+
+## Recuperar el acceso de administrador
+
+Si el administrador olvida su contraseña (nadie más puede restablecerla), en la consola de D1:
+
+```sql
+SELECT id FROM users WHERE is_admin=1;      -- anotá el número (VIEJO)
+DELETE FROM users WHERE is_admin=1;
+```
+Después registrate de nuevo con `ADMIN_CODE` (te da un id nuevo; anotalo como NUEVO) y ejecutá, reemplazando los números:
+```sql
+UPDATE accounts SET user_id=NUEVO WHERE user_id=VIEJO;
+UPDATE files    SET user_id=NUEVO WHERE user_id=VIEJO;
+UPDATE folders  SET user_id=NUEVO WHERE user_id=VIEJO;
+UPDATE invites  SET created_by=NUEVO WHERE created_by=VIEJO;
+```
 
 ## Límites a tener presentes
 
-- **Plan gratis de Cloudflare:** las funciones tienen tope de CPU y de subpeticiones por invocación. Con bloques de 8 MB y archivos repartidos en pocas cuentas está dentro de lo normal; si ves errores 1102 o 1015, avisame.
+- **Plan gratis de Cloudflare:** según su documentación, cada petición tiene **10 ms de CPU**, hay un tope de **100.000 peticiones por día** y **50 subpeticiones** por invocación. Cada bloque de 8 MB es una petición: subir 100 GB son unas 12.800.
+- **Hash de contraseñas:** es lo más pesado que hace la API y ocurre solo al entrar, registrarse o cambiar la contraseña (la sesión dura 30 días). Con 100.000 iteraciones puede pasar los 10 ms del plan gratis; no pude medirlo sin desplegarlo. Si al entrar ves un error de CPU (1102), tenés dos salidas: bajar `PBKDF2_ITERATIONS` (por ejemplo a 20000, algo menos seguro) o pasar a Workers de pago (unos USD 5/mes).
 - **Cuota de Drive:** los 15 GB de cada cuenta se comparten con Gmail y Fotos. Aljibe lee la cuota real, así que ya lo descuenta.
 - **Descarga/subida pasan por Cloudflare**, así que dependen de su ancho de banda y no son tan rápidas como hablar directo con Google.
 - **Sin papelera:** borrar un archivo lo elimina de Drive de forma definitiva.
-- **Cuentas inactivas:** Google puede borrar cuentas sin uso por 2 años. Conviene entrar de vez en cuando.
-- **Cifrado de archivos:** esta versión **no** cifra el contenido. Quien tenga acceso a tus Drives ve los archivos (las partes de un archivo grande no se pueden abrir sueltas, pero no están cifradas).
-- Las reglas de Google sobre crear cuentas solo para juntar espacio no son claras; usalo con tus propias cuentas y para uso personal.
+- **Cuentas inactivas:** Google puede borrar cuentas sin uso por 2 años.
+- Las reglas de Google sobre crear cuentas solo para juntar espacio no son claras; usalo con cuentas propias.
 
 ## Ideas para la próxima versión
-Cifrado en el cliente, redundancia (copia en dos cuentas), sincronización automática con un cron, y subida de carpetas completas.
+Cifrado en el cliente, redundancia (copia en dos cuentas), sincronización automática con un cron, subida de carpetas completas, y cuotas por usuario.
