@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Aljibe</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --surface: #ffffff; --surface-2: #efece4; --line: #e0dbcf;
+    --text: #1d2420; --muted: #6a7068; --accent: #1f6f5c; --accent-ink: #ffffff;
+    --accent-soft: #dcefe8; --warn: #a8641a; --warn-soft: #f8ead3; --danger: #b3382c; --danger-soft: #f7dfdb;
+    --radius: 12px; --shadow: 0 1px 2px rgba(20,30,25,.06), 0 4px 14px rgba(20,30,25,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121715; --surface: #1a211e; --surface-2: #222b27; --line: #2c3631;
+      --text: #e7ece8; --muted: #8e9992; --accent: #4cc2a1; --accent-ink: #0d1613;
+      --accent-soft: #1d3a31; --warn: #e0a459; --warn-soft: #3a2d18; --danger: #ef7a6c; --danger-soft: #3d2320;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  button, input { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px 80px; }
+
+  /* botones */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+    background: var(--surface); padding: 8px 14px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+    color: var(--text); text-decoration: none;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn:focus-visible, input:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink) !important; border-color: var(--accent); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.07); }
+  .btn.danger { color: var(--danger); }
+  .btn.small { padding: 4px 10px; font-size: 13px; }
+  .btn.ghost { border-color: transparent; background: transparent; }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  /* login */
+  .login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .login form {
+    width: 100%; max-width: 340px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 28px; box-shadow: var(--shadow);
+  }
+  .login h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.02em; }
+  .login p { margin: 0 0 20px; color: var(--muted); }
+  input[type=password], input[type=search], input[type=text] {
+    width: 100%; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .login .btn { width: 100%; justify-content: center; margin-top: 12px; }
+  .err { color: var(--danger); margin: 10px 0 0; min-height: 1.3em; font-size: 14px; }
+
+  /* cabecera */
+  header.top { display: flex; align-items: center; gap: 12px; padding: 18px 0 10px; flex-wrap: wrap; }
+  .brand { font-size: 22px; font-weight: 700; letter-spacing: -.02em; margin-right: auto; display: flex; align-items: center; gap: 8px; }
+  .brand svg { color: var(--accent); }
+  .total { color: var(--muted); font-size: 14px; }
+
+  .banner { padding: 10px 14px; border-radius: 10px; margin: 8px 0; display: flex; gap: 10px; align-items: center; }
+  .banner.ok { background: var(--accent-soft); }
+  .banner.bad { background: var(--danger-soft); color: var(--danger); }
+  .banner.info { background: var(--warn-soft); color: var(--warn); }
+  .banner button { margin-left: auto; }
+
+  /* secciones */
+  section.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); margin: 14px 0; }
+  .card-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; flex-wrap: wrap; }
+  .card-head h2 { margin: 0; font-size: 15px; margin-right: auto; }
+
+  /* cuentas */
+  .accounts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding: 0 16px 16px; }
+  .acc { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--bg); }
+  .acc .mail { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin: 10px 0 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .bar > i.hi { background: var(--warn); }
+  .bar > i.full { background: var(--danger); }
+  .acc small { color: var(--muted); display: block; }
+  .acc .foot { display: flex; align-items: center; margin-top: 8px; }
+  .acc .foot .btn { margin-left: auto; }
+  .empty { padding: 4px 16px 18px; color: var(--muted); }
+
+  /* explorador */
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px 12px; align-items: center; }
+  .tools input[type=search] { flex: 1 1 180px; width: auto; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 16px 8px; align-items: center; }
+  .crumbs button { border: 0; background: none; cursor: pointer; padding: 4px 6px; border-radius: 6px; color: var(--accent); font-weight: 600; }
+  .crumbs button:hover { background: var(--accent-soft); }
+  .crumbs span { color: var(--muted); }
+  .list { border-top: 1px solid var(--line); }
+  .row {
+    display: grid; grid-template-columns: 28px 1fr auto auto; gap: 10px; align-items: center;
+    padding: 9px 16px; border-bottom: 1px solid var(--line);
+  }
+  .row:last-child { border-bottom: 0; }
+  .row.folder { cursor: pointer; }
+  .row.folder:hover { background: var(--surface-2); }
+  .row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .meta { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .row .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+  .row .where { color: var(--muted); font-size: 12px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); margin-left: 6px; }
+  .ico { width: 20px; height: 20px; color: var(--muted); }
+  .row.folder .ico { color: var(--accent); }
+  .drop { margin: 0 16px 14px; border: 2px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center; color: var(--muted); }
+  body.dragging .drop { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+  .none { padding: 24px 16px; text-align: center; color: var(--muted); }
+
+  /* subidas */
+  .queue { position: fixed; right: 16px; bottom: 16px; width: min(360px, calc(100vw - 32px)); z-index: 5; }
+  .queue .card { margin: 0; }
+  .up { padding: 10px 16px; border-top: 1px solid var(--line); }
+  .up .t { display: flex; gap: 8px; align-items: baseline; }
+  .up .t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .up .t span { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .up .bar { margin: 6px 0 2px; }
+  .up small { color: var(--muted); }
+  .up.error small { color: var(--danger); }
+
+  @media (max-width: 600px) {
+    .row { grid-template-columns: 24px 1fr auto; }
+    .row .meta.date { display: none; }
+    .row .acts { grid-column: 2 / 4; justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login" class="login" hidden>
+  <form id="loginForm">
+    <h1>Aljibe</h1>
+    <p>Tus cuentas de Drive, juntas.</p>
+    <label for="pw" class="sr" style="position:absolute;left:-9999px">Contraseña</label>
+    <input id="pw" type="password" placeholder="Contraseña" autocomplete="current-password" autofocus>
+    <button class="btn primary" type="submit">Entrar</button>
+    <p class="err" id="loginErr" role="alert"></p>
+  </form>
+</div>
+
+<div id="app" class="wrap" hidden>
+  <header class="top">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c3 4 6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 3-6 6-10z"/></svg>
+      Aljibe
+    </div>
+    <span class="total" id="total"></span>
+    <button class="btn small" id="reindex" title="Reconstruye el índice leyendo lo que hay realmente en cada Drive">Reindexar</button>
+    <button class="btn small" id="logout">Salir</button>
+  </header>
+
+  <div id="banners"></div>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Cuentas de Google</h2>
+      <button class="btn small" id="refreshAcc">Actualizar cuotas</button>
+      <a class="btn small primary" href="/api/google/connect">+ Conectar cuenta</a>
+    </div>
+    <div id="accounts" class="accounts"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Archivos</h2>
+      <button class="btn small" id="newFolder">Nueva carpeta</button>
+      <button class="btn small primary" id="pick">Subir archivos</button>
+      <input type="file" id="file" multiple hidden>
+    </div>
+    <div class="tools"><input type="search" id="q" placeholder="Buscar en todos los archivos…" aria-label="Buscar"></div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="drop" id="drop">Arrastrá archivos acá para subirlos a esta carpeta</div>
+    <div class="list" id="list"></div>
+  </section>
+</div>
+
+<div class="queue" id="queue" hidden>
+  <div class="card">
+    <div class="card-head"><h2>Subidas</h2><button class="btn small ghost" id="clearQ">Limpiar</button></div>
+    <div id="uploads"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const state = { files: [], folders: [], accounts: [], path: '', q: '' };
+
+// ── helpers ──
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
+  return e;
+}
+const fmtSize = (n) => {
+  if (n == null) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + ' ' + u[i];
+};
+const fmtDate = (s) => new Date(s * 1000).toLocaleDateString('es-AR', { day: 'numeric', month: 'short', year: 'numeric' });
+const ICON = {
+  folder: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  file: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>',
+};
+const icon = (k) => { const s = document.createElement('span'); s.innerHTML = ICON[k]; return s.firstChild; };
+
+async function api(path, opts = {}) {
+  const o = { method: 'GET', ...opts, headers: { 'X-Requested-With': 'aljibe', ...(opts.headers || {}) } };
+  if (opts.json !== undefined) { o.body = JSON.stringify(opts.json); o.headers['Content-Type'] = 'application/json'; delete o.json; }
+  const r = await fetch('/api/' + path, o);
+  if (r.status === 401 && path !== 'login') { showLogin(); throw new Error('Sesión vencida'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Error ' + r.status);
+  return data;
+}
+function banner(kind, text) {
+  const b = h('div', { class: 'banner ' + kind, role: 'status' }, h('span', {}, text),
+    h('button', { class: 'btn small ghost', onclick: () => b.remove(), 'aria-label': 'Cerrar' }, '✕'));
+  $('#banners').prepend(b);
+  if (kind === 'ok') setTimeout(() => b.remove(), 8000);
+}
+const fail = (e) => banner('bad', e.message || String(e));
+
+// ── sesión ──
+function showLogin() { $('#app').hidden = true; $('#login').hidden = false; $('#pw').focus(); }
+async function boot() {
+  try { await api('me'); } catch { return showLogin(); }
+  $('#login').hidden = true; $('#app').hidden = false;
+  const p = new URLSearchParams(location.search);
+  if (p.get('connected')) banner('ok', 'Cuenta conectada: ' + p.get('connected'));
+  if (p.get('error')) banner('bad', p.get('error'));
+  if (p.toString()) history.replaceState(null, '', '/');
+  await Promise.all([loadAccounts(), loadTree()]);
+}
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('#loginErr').textContent = '';
+  try { await api('login', { method: 'POST', json: { password: $('#pw').value } }); $('#pw').value = ''; boot(); }
+  catch (err) { $('#loginErr').textContent = err.message; }
+});
+$('#logout').onclick = async () => { await api('logout', { method: 'POST' }).catch(() => {}); showLogin(); };
+
+// ── cuentas ──
+async function loadAccounts(refresh) {
+  try {
+    const d = await api('accounts' + (refresh ? '?refresh=1' : ''));
+    state.accounts = d.accounts; renderAccounts();
+  } catch (e) { fail(e); }
+}
+function renderAccounts() {
+  const box = $('#accounts'); box.replaceChildren();
+  let used = 0, limit = 0, unlimited = false;
+  if (!state.accounts.length) box.append(h('div', { class: 'empty', style: 'grid-column:1/-1' }, 'Todavía no conectaste ninguna cuenta. Tocá “+ Conectar cuenta”.'));
+  for (const a of state.accounts) {
+    if (a.known && !a.error) { // las cuentas sin cuota conocida no entran en el total
+      used += a.usage || 0;
+      if (a.limit == null) unlimited = true; else limit += a.limit;
+    }
+    const pct = a.limit ? Math.min(100, (a.usage / a.limit) * 100) : 0;
+    box.append(h('div', { class: 'acc' },
+      h('div', { class: 'mail', title: a.email }, a.email),
+      a.error ? h('small', { style: 'color:var(--danger)' }, a.error) : null,
+      h('div', { class: 'bar' }, h('i', { class: pct > 95 ? 'full' : pct > 80 ? 'hi' : '', style: `width:${pct}%` })),
+      h('small', {}, a.known ? `${fmtSize(a.usage)} de ${a.limit ? fmtSize(a.limit) : 'sin límite'} usados` : 'Cuota sin consultar'),
+      h('small', {}, `${fmtSize(a.stored)} guardados por Aljibe · ${a.parts} ${a.parts === 1 ? 'parte' : 'partes'}`),
+      h('div', { class: 'foot' }, h('button', { class: 'btn small danger', onclick: () => removeAccount(a) }, 'Quitar'))));
+  }
+  $('#total').textContent = state.accounts.length
+    ? `${fmtSize(used)} usados de ${unlimited ? '∞' : fmtSize(limit)} · ${state.accounts.length} ${state.accounts.length === 1 ? 'cuenta' : 'cuentas'}` : '';
+}
+async function removeAccount(a) {
+  if (!confirm(`¿Quitar ${a.email}? Se revoca el acceso de Aljibe. Los archivos que ya estén guardados ahí tienen que borrarse o moverse antes.`)) return;
+  try { await api('accounts/' + a.id, { method: 'DELETE', json: {} }); banner('ok', 'Cuenta quitada'); loadAccounts(); } catch (e) { fail(e); }
+}
+$('#refreshAcc').onclick = () => loadAccounts(true);
+
+// ── explorador ──
+async function loadTree() {
+  try { const d = await api('tree'); state.files = d.files; state.folders = d.folders; renderList(); } catch (e) { fail(e); }
+}
+const parentOf = (p) => p.split('/').slice(0, -1).join('/');
+function renderCrumbs() {
+  const c = $('#crumbs'); c.replaceChildren();
+  const go = (p) => () => { state.path = p; state.q = ''; $('#q').value = ''; renderList(); };
+  c.append(h('button', { onclick: go('') }, 'Inicio'));
+  let acc = '';
+  for (const part of state.path.split('/').filter(Boolean)) {
+    acc = acc ? acc + '/' + part : part;
+    c.append(h('span', {}, '›'), h('button', { onclick: go(acc) }, part));
+  }
+}
+function renderList() {
+  renderCrumbs();
+  const list = $('#list'); list.replaceChildren();
+  const q = state.q.trim().toLowerCase();
+
+  if (q) {
+    const hits = state.files.filter((f) => f.name.toLowerCase().includes(q));
+    if (!hits.length) list.append(h('div', { class: 'none' }, 'No hay archivos que coincidan.'));
+    for (const f of hits) list.append(fileRow(f, true));
+    return;
+  }
+  const subs = new Set();
+  const pre = state.path ? state.path + '/' : '';
+  for (const p of state.folders) if (p.startsWith(pre) && p !== state.path) subs.add(p.slice(pre.length).split('/')[0]);
+  for (const f of state.files) if (f.folder.startsWith(pre) && f.folder !== state.path) subs.add(f.folder.slice(pre.length).split('/')[0]);
+  for (const name of [...subs].sort((a, b) => a.localeCompare(b, 'es'))) {
+    const full = pre + name;
+    const empty = !state.files.some((f) => f.folder === full || f.folder.startsWith(full + '/')) && !state.folders.some((p) => p.startsWith(full + '/'));
+    list.append(h('div', { class: 'row folder', tabindex: '0', role: 'button',
+      onclick: () => { state.path = full; renderList(); },
+      onkeydown: (e) => { if (e.key === 'Enter') { state.path = full; renderList(); } } },
+      icon('folder'), h('div', { class: 'nm' }, name), h('div', { class: 'meta date' }, ''),
+      h('div', { class: 'acts' }, empty ? h('button', { class: 'btn small danger', onclick: (e) => { e.stopPropagation(); delFolder(full); } }, 'Borrar') : null)));
+  }
+  const here = state.files.filter((f) => f.folder === state.path);
+  for (const f of here) list.append(fileRow(f, false));
+  if (!subs.size && !here.length) list.append(h('div', { class: 'none' }, 'Esta carpeta está vacía.'));
+}
+function fileRow(f, showPath) {
+  const ready = f.status === 'ready';
+  const dl = '/api/files/' + f.id + '/download';
+  return h('div', { class: 'row' },
+    icon('file'),
+    h('div', { class: 'nm', title: f.name }, f.name,
+      f.status === 'uploading' ? h('span', { class: 'tag' }, 'subiendo') : null,
+      f.status === 'incomplete' ? h('span', { class: 'tag' }, 'incompleto') : null,
+      f.nparts > 1 ? h('span', { class: 'tag', title: 'Repartido en varias cuentas' }, f.nparts + ' partes') : null,
+      showPath ? h('div', { class: 'where' }, f.folder || 'Inicio') : null),
+    h('div', { class: 'meta' }, fmtSize(f.size)),
+    h('div', { class: 'acts' },
+      ready ? h('a', { class: 'btn small', href: dl }, 'Descargar') : null,
+      ready ? h('a', { class: 'btn small', href: dl + '?inline=1', target: '_blank', rel: 'noopener' }, 'Ver') : null,
+      h('button', { class: 'btn small', onclick: () => renameFile(f) }, 'Renombrar'),
+      h('button', { class: 'btn small', onclick: () => moveFile(f) }, 'Mover'),
+      h('button', { class: 'btn small danger', onclick: () => delFile(f) }, 'Borrar')));
+}
+async function renameFile(f) {
+  const n = prompt('Nuevo nombre:', f.name);
+  if (!n || n === f.name) return;
+  try { await api('files/' + f.id, { method: 'PATCH', json: { name: n } }); loadTree(); } catch (e) { fail(e); }
+}
+async function moveFile(f) {
+  const p = prompt('Mover a la carpeta (ej. fotos/2024). Vacío = Inicio:', f.folder);
+  if (p === null) return;
+  try { await api('files/' + f.id, { method: 'PATCH', json: { folder: p } }); loadTree(); } catch (e) { fail(e); }
+}
+async function delFile(f) {
+  if (!confirm(`¿Borrar “${f.name}”? Se elimina también de Google Drive (no hay papelera).`)) return;
+  try { await api('files/' + f.id, { method: 'DELETE', json: {} }); loadTree(); loadAccounts(true); } catch (e) { fail(e); }
+}
+async function delFolder(p) {
+  try { await api('folders', { method: 'DELETE', json: { path: p } }); loadTree(); } catch (e) { fail(e); }
+}
+$('#newFolder').onclick = async () => {
+  const n = prompt('Nombre de la carpeta nueva:');
+  if (!n) return;
+  try { await api('folders', { method: 'POST', json: { path: (state.path ? state.path + '/' : '') + n } }); loadTree(); } catch (e) { fail(e); }
+};
+$('#q').addEventListener('input', (e) => { state.q = e.target.value; renderList(); });
+$('#reindex').onclick = async () => {
+  const b = $('#reindex'); b.disabled = true; b.textContent = 'Reindexando…';
+  try {
+    const r = await api('reindex', { method: 'POST', json: {} });
+    banner(r.errors.length ? 'info' : 'ok',
+      `Reindexado: ${r.found} archivos en Drive, ${r.added} recuperados, ${r.incomplete} incompletos.` + (r.errors.length ? ' Errores: ' + r.errors.join('; ') : ''));
+    loadTree(); loadAccounts(true);
+  } catch (e) { fail(e); } finally { b.disabled = false; b.textContent = 'Reindexar'; }
+};
+
+// ── subidas ──
+const queue = [];
+let working = false;
+$('#pick').onclick = () => $('#file').click();
+$('#file').onchange = (e) => { enqueue([...e.target.files]); e.target.value = ''; };
+let dragDepth = 0;
+addEventListener('dragenter', (e) => { if (e.dataTransfer?.types?.includes('Files')) { dragDepth++; document.body.classList.add('dragging'); } });
+addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('dragover', (e) => e.preventDefault());
+addEventListener('drop', (e) => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  if (e.dataTransfer?.files?.length && !$('#app').hidden) enqueue([...e.dataTransfer.files]);
+});
+$('#clearQ').onclick = () => {
+  for (let i = queue.length - 1; i >= 0; i--) if (['done', 'error'].includes(queue[i].state)) { queue[i].el.remove(); queue.splice(i, 1); }
+  if (!queue.length) $('#queue').hidden = true;
+};
+function enqueue(files) {
+  for (const file of files) {
+    const it = { file, folder: state.path, state: 'wait', sent: 0 };
+    it.fill = h('i', { style: 'width:0%' });
+    it.msg = h('small', {}, 'En espera');
+    it.pct = h('span', {}, '0%');
+    it.el = h('div', { class: 'up' }, h('div', { class: 't' }, h('b', { title: file.name }, file.name), it.pct), h('div', { class: 'bar' }, it.fill), it.msg);
+    $('#uploads').append(it.el); queue.push(it);
+  }
+  $('#queue').hidden = false;
+  if (!working) pump();
+}
+function progress(it) {
+  const p = it.file.size ? Math.min(100, (it.sent / it.file.size) * 100) : 100;
+  it.fill.style.width = p + '%'; it.pct.textContent = Math.floor(p) + '%';
+}
+async function pump() {
+  working = true;
+  for (const it of queue) {
+    if (it.state !== 'wait') continue;
+    it.state = 'run';
+    try { await uploadOne(it); it.state = 'done'; it.msg.textContent = 'Listo'; it.fill.style.width = '100%'; it.pct.textContent = '100%'; }
+    catch (e) { it.state = 'error'; it.el.classList.add('error'); it.msg.textContent = e.message; }
+    await loadTree(); loadAccounts();
+  }
+  working = false;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function uploadOne(it) {
+  const f = it.file;
+  if (!f.size) throw new Error('Archivo vacío: no se puede subir');
+  it.msg.textContent = 'Reservando espacio…';
+  const s = await api('upload/start', { method: 'POST', json: { name: f.name, size: f.size, folder: it.folder, mime: f.type || 'application/octet-stream' } });
+  let base = 0;
+  for (const part of s.parts) {
+    it.msg.textContent = s.parts.length > 1 ? `Parte ${part.idx + 1} de ${s.parts.length} → ${part.account}` : 'Subiendo → ' + part.account;
+    let off = 0, tries = 0;
+    while (off < part.size) {
+      const end = Math.min(off + s.block, part.size);
+      try {
+        const r = await api(`upload/block?file=${s.file_id}&idx=${part.idx}&start=${off}&end=${end}`,
+          { method: 'PUT', body: f.slice(base + off, base + end), headers: { 'Content-Type': 'application/octet-stream' } });
+        tries = 0;
+        off = r.done ? part.size : (r.next ?? end);
+        it.sent = base + off; progress(it);
+      } catch (e) {
+        if (++tries > 4) throw new Error('Se cortó la subida: ' + e.message);
+        it.msg.textContent = `Reintentando (${tries}/4)…`;
+        await sleep(1200 * tries);
+        try {
+          const st = await api('upload/status', { method: 'POST', json: { file: s.file_id, idx: part.idx } });
+          off = st.done ? part.size : st.next;
+          it.sent = base + off; progress(it);
+        } catch { /* se reintenta en el próximo ciclo */ }
+      }
+    }
+    base += part.size;
+  }
+  await api('upload/finish', { method: 'POST', json: { file: s.file_id } });
+}
+
+boot();
+</script>
+</body>
+</html>
