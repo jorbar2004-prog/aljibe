@@ -1,4 +1,4 @@
-// Aljibe v0.3 — API multiusuario (Cloudflare Pages Function, atiende todo /api/*)
+// Aljibe v0.4 — API multiusuario (Cloudflare Pages Function, atiende todo /api/*)
 // Bindings / variables necesarias: DB (D1), ADMIN_CODE, SESSION_SECRET,
 // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
 
@@ -108,6 +108,8 @@ async function adminDeleteUser(env, me, id) {
     catch { /* si falla la revocación igual se quita */ }
   }
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM shares WHERE user_id=?').bind(id),
+    env.DB.prepare('DELETE FROM moves WHERE file_id IN (SELECT id FROM files WHERE user_id=?)').bind(id),
     env.DB.prepare('DELETE FROM parts WHERE file_id IN (SELECT id FROM files WHERE user_id=?)').bind(id),
     env.DB.prepare('DELETE FROM files WHERE user_id=?').bind(id),
     env.DB.prepare('DELETE FROM folders WHERE user_id=?').bind(id),
@@ -396,7 +398,10 @@ async function deleteAccount(env, user, id) {
       method: 'POST', body: new URLSearchParams({ token: await decrypt(env, acc.refresh_token) }),
     });
   } catch { /* si falla la revocación igual la quitamos */ }
-  await env.DB.prepare('DELETE FROM accounts WHERE id=?').bind(id).run();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM moves WHERE to_account=?').bind(id),
+    env.DB.prepare('DELETE FROM accounts WHERE id=?').bind(id),
+  ]);
   tokenCache.delete(acc.id);
   return json({ ok: true });
 }
@@ -404,7 +409,10 @@ async function deleteAccount(env, user, id) {
 // ───────────── árbol, carpetas y archivos ─────────────
 async function tree(env, user) {
   const files = (await env.DB.prepare(
-    'SELECT id, name, folder, size, mime, status, nparts, created_at FROM files WHERE user_id=? ORDER BY name COLLATE NOCASE'
+    `SELECT f.id, f.name, f.folder, f.size, f.mime, f.status, f.nparts, f.created_at,
+            s.token AS share_token, s.expires_at AS share_exp
+     FROM files f LEFT JOIN shares s ON s.file_id=f.id
+     WHERE f.user_id=? ORDER BY f.name COLLATE NOCASE`
   ).bind(user.id).all()).results;
   const folders = (await env.DB.prepare('SELECT path FROM folders WHERE user_id=? ORDER BY path').bind(user.id).all()).results.map((r) => r.path);
   return json({ files, folders });
@@ -456,6 +464,8 @@ async function deleteFile(env, user, id) {
   }
   if (failed.length) throw new HttpError(502, 'No se pudo borrar de Drive en: ' + failed.join(', ') + '. El archivo sigue registrado.');
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM shares WHERE file_id=?').bind(id),
+    env.DB.prepare('DELETE FROM moves WHERE file_id=?').bind(id),
     env.DB.prepare('DELETE FROM parts WHERE file_id=?').bind(id),
     env.DB.prepare('DELETE FROM files WHERE id=?').bind(id),
   ]);
@@ -464,9 +474,14 @@ async function deleteFile(env, user, id) {
 
 // ───────────── descarga (con soporte de Range) ─────────────
 async function download(ctx, user, id, inline) {
-  const { env, request } = ctx;
-  const f = await env.DB.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id, user.id).first();
+  const f = await ctx.env.DB.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id, user.id).first();
   if (!f) throw new HttpError(404, 'El archivo no existe');
+  return streamFile(ctx, f, inline, 'private, max-age=0, must-revalidate');
+}
+
+async function streamFile(ctx, f, inline, cache) {
+  const { env, request } = ctx;
+  const id = f.id;
   if (f.status !== 'ready') throw new HttpError(409, f.status === 'uploading' ? 'El archivo todavía se está subiendo' : 'Al archivo le faltan partes en Drive (probá "Reindexar")');
   const parts = (await env.DB.prepare(
     `SELECT p.idx, p.size, p.drive_id, a.id AS aid, a.email, a.refresh_token
@@ -518,13 +533,163 @@ async function download(ctx, user, id, inline) {
     'Content-Type': f.mime,
     'Content-Disposition': `${asInline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(f.name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16))}`,
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'private, max-age=0, must-revalidate',
+    'Cache-Control': cache,
     'X-Content-Type-Options': 'nosniff',
   };
   if (f.mime !== 'application/pdf') headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
   if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${f.size}`;
   if (typeof FixedLengthStream === 'undefined') headers['Content-Length'] = String(len);
   return new Response(readable, { status, headers });
+}
+
+// ───────────── enlaces para compartir ─────────────
+// Un enlace = un token largo e imposible de adivinar. Cualquiera que lo tenga descarga el archivo (sin cuenta)
+// hasta que venza o se desactive. Hay un solo enlace por archivo: crear otro reemplaza (y anula) el anterior.
+async function shareCreate(env, user, id, body) {
+  const f = await env.DB.prepare('SELECT id, status FROM files WHERE id=? AND user_id=?').bind(id, user.id).first();
+  if (!f) throw new HttpError(404, 'El archivo no existe');
+  if (f.status !== 'ready') throw new HttpError(409, 'El archivo todavía no está listo para compartir');
+  const days = Math.min(90, Math.max(1, Math.floor(Number(body.days) || 7)));
+  const token = b64u.enc(crypto.getRandomValues(new Uint8Array(24)));
+  const exp = now() + days * 86400;
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM shares WHERE file_id=?').bind(id),
+    env.DB.prepare('INSERT INTO shares (token, file_id, user_id, created_at, expires_at) VALUES (?,?,?,?,?)').bind(token, id, user.id, now(), exp),
+  ]);
+  return json({ ok: true, token, expires_at: exp });
+}
+
+async function shareDelete(env, user, id) {
+  await env.DB.prepare('DELETE FROM shares WHERE file_id=? AND user_id=?').bind(id, user.id).run();
+  return json({ ok: true });
+}
+
+async function shareDownload(ctx, token, inline) {
+  const { env } = ctx;
+  const bad = new HttpError(404, 'El enlace no existe o ya venció');
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) throw bad;
+  const s = await env.DB.prepare('SELECT * FROM shares WHERE token=?').bind(token).first();
+  if (!s) throw bad;
+  if (s.expires_at < now()) { await env.DB.prepare('DELETE FROM shares WHERE token=?').bind(token).run(); throw bad; }
+  const f = await env.DB.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(s.file_id, s.user_id).first();
+  if (!f) throw bad;
+  const res = await streamFile(ctx, f, inline, 'private, no-store');
+  res.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  res.headers.set('Referrer-Policy', 'no-referrer');
+  return res;
+}
+
+// ───────────── equilibrar entre cuentas ─────────────
+// Mueve partes de la cuenta con menos espacio libre a la que más tiene, hasta que queden parejas.
+// Cada parte se copia por bloques de 8 MB (reanudable) y recién cuando está completa se cambia en la base y se borra la original.
+const MIN_GAP = 128 * 1024 * 1024; // no se mueve nada si la diferencia de espacio libre es menor
+
+async function rebalancePlan(env, user) {
+  const accs = (await loadAccounts(env, user.id, 0)).filter((a) => !a.error && a.limit != null);
+  if (accs.length < 2) throw new HttpError(400, 'Hacen falta al menos 2 cuentas conectadas y legibles para equilibrar.');
+  const rows = (await env.DB.prepare(
+    `SELECT p.file_id, p.idx, p.size, p.account_id, f.name FROM parts p JOIN files f ON f.id=p.file_id
+     WHERE f.user_id=? AND f.status='ready' AND p.drive_id IS NOT NULL`).bind(user.id).all()).results;
+  const free = new Map(accs.map((a) => [a.id, a.free]));
+  const email = new Map(accs.map((a) => [a.id, a.email]));
+  const held = new Map(accs.map((a) => [a.id, []]));
+  for (const r of rows) held.get(r.account_id)?.push(r);
+  for (const l of held.values()) l.sort((a, b) => b.size - a.size);
+
+  const moves = [];
+  for (let guard = 0; guard < 500; guard++) {
+    const order = [...free.keys()].sort((a, b) => free.get(a) - free.get(b));
+    const dst = order[order.length - 1];
+    let done = false;
+    for (const src of order) {
+      if (src === dst) break;
+      const gap = free.get(dst) - free.get(src);
+      if (gap < MIN_GAP) break;
+      const limit = Math.min(gap / 2, free.get(dst) - MARGIN);
+      const list = held.get(src);
+      const i = list.findIndex((p) => p.size <= limit);
+      if (i < 0) continue;
+      const [p] = list.splice(i, 1);
+      free.set(src, free.get(src) + p.size); free.set(dst, free.get(dst) - p.size);
+      held.get(dst).push(p); held.get(dst).sort((a, b) => b.size - a.size);
+      moves.push({ file: p.file_id, idx: p.idx, name: p.name, size: p.size, from: email.get(src), to: dst, to_email: email.get(dst) });
+      done = true; break;
+    }
+    if (!done) break;
+  }
+  return json({ moves, bytes: moves.reduce((n, m) => n + m.size, 0), accounts: accs.length });
+}
+
+async function moveFinish(env, user, part, mv, dst, newId) {
+  // La parte solo cambia de cuenta si sigue siendo la misma que se copió (nadie la borró ni la movió mientras tanto).
+  const u = await env.DB.prepare('UPDATE parts SET account_id=?, drive_id=? WHERE file_id=? AND idx=? AND drive_id=?')
+    .bind(dst.id, newId, part.file_id, part.idx, part.drive_id).run();
+  await env.DB.prepare('DELETE FROM moves WHERE file_id=? AND idx=?').bind(part.file_id, part.idx).run();
+  if (u.meta.changes !== 1) {
+    try { await drive(env, dst, `/files/${newId}`, { method: 'DELETE' }); } catch { /* queda como copia suelta */ }
+    throw new HttpError(409, 'El archivo cambió mientras se movía. Probá de nuevo.');
+  }
+  let deleted = true;
+  try {
+    const src = await env.DB.prepare('SELECT * FROM accounts WHERE id=? AND user_id=?').bind(mv.from_account, user.id).first();
+    const r = await drive(env, src, `/files/${part.drive_id}`, { method: 'DELETE' });
+    deleted = r.ok || r.status === 404;
+  } catch { deleted = false; }
+  tokenCache.clear();
+  return json({ done: true, deleted });
+}
+
+async function moveOwn(env, user, fileId, idx) {
+  const part = await env.DB.prepare(
+    `SELECT p.* FROM parts p JOIN files f ON f.id=p.file_id
+     WHERE p.file_id=? AND p.idx=? AND f.user_id=? AND f.status='ready' AND p.drive_id IS NOT NULL`
+  ).bind(String(fileId), Number(idx), user.id).first();
+  if (!part) throw new HttpError(404, 'Parte no encontrada');
+  return part;
+}
+
+async function moveStart(env, user, body) {
+  const part = await moveOwn(env, user, body.file, body.idx);
+  const dst = await env.DB.prepare('SELECT * FROM accounts WHERE id=? AND user_id=?').bind(Number(body.to), user.id).first();
+  if (!dst) throw new HttpError(404, 'La cuenta de destino no existe');
+  if (dst.id === part.account_id) throw new HttpError(400, 'La parte ya está en esa cuenta');
+  const [d] = (await loadAccounts(env, user.id, 120)).filter((a) => a.id === dst.id);
+  if (d.error || d.free < part.size + MARGIN) throw new HttpError(507, 'La cuenta de destino no tiene espacio suficiente');
+
+  let mv = await env.DB.prepare('SELECT * FROM moves WHERE file_id=? AND idx=?').bind(part.file_id, part.idx).first();
+  if (mv && mv.to_account === dst.id) { // reanudar: preguntar a Google hasta dónde llegó
+    const r = await fetch(mv.session_url, { method: 'PUT', headers: { 'Content-Range': `bytes */${part.size}` } });
+    if (r.status === 308) return json({ done: false, size: part.size, block: BLOCK, next: nextFromRange(r.headers.get('Range')) });
+    if (r.ok) return moveFinish(env, user, part, { from_account: part.account_id }, dst, (await r.json()).id);
+    // la sesión venció: se arranca una nueva
+  }
+  const f = await env.DB.prepare('SELECT * FROM files WHERE id=?').bind(part.file_id).first();
+  const loc = await initSession(env, dst, { id: f.id, name: f.name, folder: f.folder, mime: f.mime, idx: part.idx, total: f.nparts, size: f.size, partSize: part.size });
+  await env.DB.prepare('INSERT OR REPLACE INTO moves (file_id, idx, to_account, session_url, created_at) VALUES (?,?,?,?,?)')
+    .bind(part.file_id, part.idx, dst.id, loc, now()).run();
+  return json({ done: false, size: part.size, block: BLOCK, next: 0 });
+}
+
+async function moveBlock(env, user, url) {
+  const part = await moveOwn(env, user, url.searchParams.get('file'), url.searchParams.get('idx'));
+  const start = Number(url.searchParams.get('start')), end = Number(url.searchParams.get('end')); // end exclusivo
+  if (!(start >= 0 && end > start && end <= part.size && end - start <= BLOCK)) throw new HttpError(400, 'Rango inválido');
+  const mv = await env.DB.prepare('SELECT * FROM moves WHERE file_id=? AND idx=?').bind(part.file_id, part.idx).first();
+  if (!mv) throw new HttpError(409, 'No hay un movimiento en curso para esta parte');
+  const dst = await env.DB.prepare('SELECT * FROM accounts WHERE id=? AND user_id=?').bind(mv.to_account, user.id).first();
+  const src = await env.DB.prepare('SELECT * FROM accounts WHERE id=? AND user_id=?').bind(part.account_id, user.id).first();
+  if (!dst || !src) throw new HttpError(404, 'La cuenta ya no existe');
+
+  const g = await fetch(`${DRIVE}/files/${part.drive_id}?alt=media`, {
+    headers: { Authorization: 'Bearer ' + (await accessToken(env, src)), Range: `bytes=${start}-${end - 1}` },
+  });
+  if (!g.ok) throw new HttpError(502, `Drive respondió ${g.status} al leer la parte original`);
+  const data = await g.arrayBuffer();
+  if (data.byteLength !== end - start) throw new HttpError(502, 'Drive devolvió un bloque incompleto');
+  const r = await fetch(mv.session_url, { method: 'PUT', headers: { 'Content-Range': `bytes ${start}-${end - 1}/${part.size}` }, body: data });
+  if (r.status === 308) return json({ done: false, next: nextFromRange(r.headers.get('Range')) });
+  if (r.ok) return moveFinish(env, user, part, { from_account: src.id }, dst, (await r.json()).id);
+  throw new HttpError(502, `Drive respondió ${r.status} al copiar el bloque`);
 }
 
 // ───────────── subida ─────────────
@@ -771,6 +936,8 @@ async function route(ctx) {
   if (path === 'logout' && m === 'POST')
     return json({ ok: true }, 200, { 'Set-Cookie': 'aljibe=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0' });
 
+  if (seg[0] === 's' && seg[1] && seg.length === 2 && (m === 'GET' || m === 'HEAD')) return shareDownload(ctx, seg[1], url.searchParams.get('inline') === '1');
+
   const user = await getUser(request, env);
   if (path === 'google/callback' && m === 'GET') return googleCallback(env, url, request, user);
   if (!user) throw new HttpError(401, 'No autenticado');
@@ -787,6 +954,8 @@ async function route(ctx) {
 
   if (seg[0] === 'files' && seg[1]) {
     if (seg[2] === 'download' && m === 'GET') return download(ctx, user, seg[1], url.searchParams.get('inline') === '1');
+    if (seg[2] === 'share' && m === 'POST') return shareCreate(env, user, seg[1], await readBody());
+    if (seg[2] === 'share' && m === 'DELETE') return shareDelete(env, user, seg[1]);
     if (m === 'PATCH') return patchFile(env, user, seg[1], await readBody());
     if (m === 'DELETE') return deleteFile(env, user, seg[1]);
   }
@@ -795,6 +964,9 @@ async function route(ctx) {
   if (path === 'upload/block' && m === 'PUT') return uploadBlock(request, env, user, url);
   if (path === 'upload/status' && m === 'POST') return uploadStatus(env, user, await readBody());
   if (path === 'upload/finish' && m === 'POST') return uploadFinish(env, user, await readBody());
+  if (path === 'rebalance/plan' && m === 'POST') return rebalancePlan(env, user);
+  if (path === 'move/start' && m === 'POST') return moveStart(env, user, await readBody());
+  if (path === 'move/block' && m === 'PUT') return moveBlock(env, user, url);
   if (path === 'reindex' && m === 'POST') return reindex(env, user);
 
   // Administración
