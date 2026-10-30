@@ -1,12 +1,10 @@
-// Aljibe v0.2 — API multiusuario (Cloudflare Pages Function, atiende todo /api/*)
+// Aljibe v0.3 — API multiusuario (Cloudflare Pages Function, atiende todo /api/*)
 // Bindings / variables necesarias: DB (D1), ADMIN_CODE, SESSION_SECRET,
-// GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET. Opcional: PBKDF2_ITERATIONS.
+// GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
 
 const BLOCK = 8 * 1024 * 1024;       // tamaño de bloque de subida (múltiplo de 256 KiB)
 const MARGIN = 16 * 1024 * 1024;     // espacio que se deja libre en cada cuenta
 const SESSION_DAYS = 30;
-const MAX_FAILS = 5;                 // intentos fallidos antes de bloquear
-const LOCK_SECONDS = 15 * 60;
 const SCOPES = 'openid email https://www.googleapis.com/auth/drive.file';
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
@@ -61,28 +59,6 @@ function sameBytes(a, b) {
 async function sha(text) { return new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(String(text ?? '')))); }
 const codeEq = async (a, b) => sameBytes(await sha(a), await sha(b));
 
-// ───────────── contraseñas ─────────────
-const iterations = (env) => Math.min(1_000_000, Math.max(1000, Number(env.PBKDF2_ITERATIONS) || 100000));
-async function pbkdf2(pw, salt, iters) {
-  const k = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
-  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iters }, k, 256));
-}
-async function hashPassword(env, pw) {
-  const iters = iterations(env);
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  return `pbkdf2$${iters}$${b64u.enc(salt)}$${b64u.enc(await pbkdf2(pw, salt, iters))}`;
-}
-async function checkPassword(pw, stored) {
-  const [kind, iters, salt, hash] = String(stored).split('$');
-  if (kind !== 'pbkdf2' || !iters || !salt || !hash) return false;
-  return sameBytes(await pbkdf2(pw, b64u.dec(salt), Number(iters)), b64u.dec(hash));
-}
-function randomPassword() {
-  const abc = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const r = crypto.getRandomValues(new Uint8Array(12));
-  return [...r].map((x) => abc[x % abc.length]).join('');
-}
-
 // ───────────── sesión ─────────────
 function readCookies(req) {
   const o = {};
@@ -92,11 +68,9 @@ function readCookies(req) {
   }
   return o;
 }
-// La firma incluye el final del hash de la contraseña: al cambiarla, las sesiones viejas dejan de valer.
-const pwTag = (pw) => String(pw).slice(-10);
 async function sessionCookie(env, user) {
   const exp = now() + SESSION_DAYS * 86400;
-  const sig = await sign(env, `s:${user.id}.${exp}.${pwTag(user.pw)}`);
+  const sig = await sign(env, `s:${user.id}.${exp}`);
   return `aljibe=${user.id}.${exp}.${sig}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
 }
 async function getUser(req, env) {
@@ -104,83 +78,13 @@ async function getUser(req, env) {
   if (!c) return null;
   const [uid, exp, sig] = c.split('.');
   if (!uid || !exp || !sig || Number(exp) < now()) return null;
-  const user = await env.DB.prepare('SELECT id, email, pw, is_admin FROM users WHERE id=?').bind(Number(uid)).first();
+  const user = await env.DB.prepare('SELECT id, email, is_admin FROM users WHERE id=?').bind(Number(uid)).first();
   if (!user) return null;
-  if (!(await verifySig(env, `s:${user.id}.${exp}.${pwTag(user.pw)}`, sig))) return null;
+  if (!(await verifySig(env, `s:${user.id}.${exp}`, sig))) return null;
   return user;
 }
 const publicUser = (u) => ({ id: u.id, email: u.email, is_admin: !!u.is_admin });
 const normEmail = (e) => String(e ?? '').trim().toLowerCase();
-const validEmail = (e) => e.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// ───────────── usuarios: registro, entrada, contraseña ─────────────
-async function register(env, body) {
-  const email = normEmail(body.email);
-  const pw = String(body.password ?? '');
-  const code = String(body.code ?? '').trim();
-  if (!validEmail(email)) throw new HttpError(400, 'El email no es válido');
-  if (pw.length < 8 || pw.length > 200) throw new HttpError(400, 'La contraseña debe tener al menos 8 caracteres');
-
-  let isAdmin = 0, invite = null;
-  if (env.ADMIN_CODE && code && (await codeEq(code, env.ADMIN_CODE))) {
-    const a = await env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE is_admin=1').first();
-    if (a.n > 0) throw new HttpError(403, 'Ya existe un administrador. Pedile una invitación.');
-    isAdmin = 1;
-  } else {
-    invite = code ? await env.DB.prepare('SELECT * FROM invites WHERE code=?').bind(code).first() : null;
-    if (!invite || invite.used_by || invite.expires_at < now()) throw new HttpError(403, 'La invitación no es válida o ya venció');
-  }
-  if (await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first())
-    throw new HttpError(409, 'Ya existe una cuenta con ese email');
-
-  const user = { email, pw: await hashPassword(env, pw), is_admin: isAdmin };
-  let r;
-  try {
-    r = await env.DB.prepare('INSERT INTO users (email, pw, is_admin, created_at) VALUES (?,?,?,?)')
-      .bind(email, user.pw, isAdmin, now()).run();
-  } catch { throw new HttpError(409, 'Ya existe una cuenta con ese email'); }
-  user.id = r.meta.last_row_id;
-
-  if (invite) { // la invitación se consume de forma atómica: si otro la usó primero, se deshace
-    const u = await env.DB.prepare('UPDATE invites SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL')
-      .bind(user.id, now(), invite.code).run();
-    if (u.meta.changes !== 1) {
-      await env.DB.prepare('DELETE FROM users WHERE id=?').bind(user.id).run();
-      throw new HttpError(403, 'La invitación ya fue usada');
-    }
-  }
-  return json({ ok: true, user: publicUser(user) }, 200, { 'Set-Cookie': await sessionCookie(env, user) });
-}
-
-async function login(env, body) {
-  const email = normEmail(body.email);
-  const pw = String(body.password ?? '');
-  const u = await env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first();
-  if (u && u.locked_until > now()) throw new HttpError(429, 'Demasiados intentos fallidos. Probá de nuevo en unos minutos.');
-  const good = u ? await checkPassword(pw, u.pw) : (await pbkdf2(pw, new Uint8Array(16), iterations(env)), false);
-  if (!good) {
-    if (u) {
-      const fails = (u.locked_until && u.locked_until <= now() ? 0 : u.fails) + 1;
-      await env.DB.prepare('UPDATE users SET fails=?, locked_until=? WHERE id=?')
-        .bind(fails, fails >= MAX_FAILS ? now() + LOCK_SECONDS : 0, u.id).run();
-    }
-    await sleep(500);
-    throw new HttpError(401, 'Email o contraseña incorrectos');
-  }
-  if (u.fails || u.locked_until) await env.DB.prepare('UPDATE users SET fails=0, locked_until=0 WHERE id=?').bind(u.id).run();
-  return json({ ok: true, user: publicUser(u) }, 200, { 'Set-Cookie': await sessionCookie(env, u) });
-}
-
-async function changePassword(env, user, body) {
-  const next = String(body.next ?? '');
-  if (next.length < 8 || next.length > 200) throw new HttpError(400, 'La contraseña nueva debe tener al menos 8 caracteres');
-  if (!(await checkPassword(String(body.current ?? ''), user.pw))) throw new HttpError(401, 'La contraseña actual no es correcta');
-  const pw = await hashPassword(env, next);
-  await env.DB.prepare('UPDATE users SET pw=?, fails=0, locked_until=0 WHERE id=?').bind(pw, user.id).run();
-  return json({ ok: true }, 200, { 'Set-Cookie': await sessionCookie(env, { ...user, pw }) });
-}
-
 // ───────────── administración ─────────────
 function needAdmin(user) { if (!user.is_admin) throw new HttpError(403, 'Solo el administrador puede hacer esto'); }
 
@@ -212,15 +116,6 @@ async function adminDeleteUser(env, me, id) {
   ]);
   tokenCache.clear();
   return json({ ok: true });
-}
-
-async function adminResetPassword(env, me, id) {
-  if (id === me.id) throw new HttpError(400, 'Para tu propia contraseña usá "Cambiar contraseña"');
-  const u = await env.DB.prepare('SELECT id, email FROM users WHERE id=?').bind(id).first();
-  if (!u) throw new HttpError(404, 'El usuario no existe');
-  const temp = randomPassword();
-  await env.DB.prepare('UPDATE users SET pw=?, fails=0, locked_until=0 WHERE id=?').bind(await hashPassword(env, temp), id).run();
-  return json({ ok: true, email: u.email, password: temp });
 }
 
 async function adminCreateInvite(env, me, body) {
@@ -337,72 +232,141 @@ async function ensureRootFolder(token) {
 }
 
 // ───────────── OAuth ─────────────
-// El "state" va firmado y atado al usuario que inició la conexión, para que nadie pueda
-// hacer que otra persona termine conectando la cuenta de Google de un tercero a su sesión.
-async function googleConnect(env, url, user) {
+// Un solo flujo de Google para dos cosas:
+//  · modo "l" (entrar): identifica a la persona por su email de Google. Si ya es usuaria, entra; si no, necesita
+//    una invitación (o el ADMIN_CODE si todavía no hay administrador). Esa misma cuenta queda conectada como almacenamiento.
+//  · modo "c" (conectar otra cuenta): suma una cuenta de Drive al usuario que ya tiene sesión.
+// El "state" va firmado. En modo "c" queda atado al usuario; en modo "l" además se ata al navegador con una cookie
+// temporal, para que nadie pueda hacer que otra persona termine entrando a una sesión ajena.
+const redirectUri = (url) => url.origin + '/api/google/callback';
+const stateCookie = (v, age) => `aljibe_st=${v}; Path=/api/google; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
+
+async function startOAuth(env, url, mode, extra) {
   if (!env.GOOGLE_CLIENT_ID) throw new HttpError(500, 'Falta configurar GOOGLE_CLIENT_ID');
   const nonce = b64u.enc(crypto.getRandomValues(new Uint8Array(12)));
   const exp = now() + 600;
-  const sig = await sign(env, `o:${nonce}.${exp}.${user.id}`);
+  const sig = await sign(env, `${mode}:${nonce}.${exp}.${extra}`);
   const p = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
-    redirect_uri: url.origin + '/api/google/callback',
+    redirect_uri: redirectUri(url),
     response_type: 'code',
     scope: SCOPES,
     access_type: 'offline',
     prompt: 'consent select_account',
-    state: `${nonce}.${exp}.${sig}`,
+    state: `${mode}.${nonce}.${exp}.${extra}.${sig}`,
   });
-  return new Response(null, { status: 302, headers: { Location: 'https://accounts.google.com/o/oauth2/v2/auth?' + p, 'Cache-Control': 'no-store' } });
+  const headers = { Location: 'https://accounts.google.com/o/oauth2/v2/auth?' + p, 'Cache-Control': 'no-store' };
+  if (mode === 'l') headers['Set-Cookie'] = stateCookie(nonce, 600);
+  return new Response(null, { status: 302, headers });
 }
 
-async function googleCallback(env, url, user) {
-  const back = (q) => new Response(null, { status: 302, headers: { Location: '/?' + q, 'Cache-Control': 'no-store' } });
+async function googleLogin(env, url) {
+  const invite = (url.searchParams.get('invite') || '').trim();
+  if (!/^[A-Za-z0-9_-]{0,200}$/.test(invite)) throw new HttpError(400, 'La invitación no es válida');
+  return startOAuth(env, url, 'l', invite || '-');
+}
+const googleConnect = (env, url, user) => startOAuth(env, url, 'c', String(user.id));
+
+async function exchange(env, url) {
+  const err = url.searchParams.get('error');
+  if (err) throw new HttpError(400, err === 'access_denied' ? 'Cancelaste el acceso con Google.' : 'Google devolvió: ' + err);
+  const code = url.searchParams.get('code');
+  if (!code) throw new HttpError(400, 'Falta el código de Google');
+  const tr = await fetch(TOKEN_URL, {
+    method: 'POST',
+    body: new URLSearchParams({
+      code,
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: redirectUri(url),
+      grant_type: 'authorization_code',
+    }),
+  });
+  const t = await tr.json();
+  if (!tr.ok) throw new HttpError(502, 'Google rechazó el código: ' + (t.error_description || t.error));
+  if (!(t.scope || '').includes('drive.file'))
+    throw new HttpError(400, 'Hay que aceptar el permiso de Drive para poder guardar archivos.');
+  if (!t.refresh_token)
+    throw new HttpError(400, 'Google no entregó refresh token. Quitá el acceso de Aljibe en myaccount.google.com/permissions y probá de nuevo.');
+  const ui = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: 'Bearer ' + t.access_token },
+  })).json();
+  const email = String(ui.email || '').toLowerCase();
+  if (!email) throw new HttpError(502, 'No se pudo leer el email de la cuenta');
+  if (ui.email_verified === false) throw new HttpError(400, 'Google no verificó ese email');
+  return { t, email };
+}
+
+// Guarda (o actualiza) la cuenta de Drive de un usuario. Devuelve false si pertenece a otro usuario.
+async function saveAccount(env, userId, email, t) {
+  const other = await env.DB.prepare('SELECT user_id FROM accounts WHERE email=?').bind(email).first();
+  if (other && other.user_id !== userId) return false;
+  const root = await ensureRootFolder(t.access_token);
+  await env.DB.prepare(
+    `INSERT INTO accounts (user_id, email, refresh_token, root_folder_id, created_at) VALUES (?,?,?,?,?)
+     ON CONFLICT(email) DO UPDATE SET refresh_token=excluded.refresh_token, root_folder_id=excluded.root_folder_id`
+  ).bind(userId, email, await encrypt(env, t.refresh_token), root, now()).run();
+  tokenCache.clear();
+  return true;
+}
+
+async function googleCallback(env, url, req, user) {
+  const to = (q, cookies = []) => {
+    const h = new Headers({ Location: '/?' + q, 'Cache-Control': 'no-store' });
+    for (const c of cookies) h.append('Set-Cookie', c);
+    return new Response(null, { status: 302, headers: h });
+  };
+  let mode = '';
   try {
-    const err = url.searchParams.get('error');
-    if (err) throw new HttpError(400, 'Google devolvió: ' + err);
-    const [nonce, exp, sig] = (url.searchParams.get('state') || '').split('.');
-    if (!sig || Number(exp) < now() || !(await verifySig(env, `o:${nonce}.${exp}.${user.id}`, sig)))
-      throw new HttpError(400, 'La conexión venció o no es válida. Probá de nuevo.');
-    const code = url.searchParams.get('code');
-    if (!code) throw new HttpError(400, 'Falta el código de Google');
-
-    const tr = await fetch(TOKEN_URL, {
-      method: 'POST',
-      body: new URLSearchParams({
-        code,
-        client_id: env.GOOGLE_CLIENT_ID,
-        client_secret: env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: url.origin + '/api/google/callback',
-        grant_type: 'authorization_code',
-      }),
-    });
-    const t = await tr.json();
-    if (!tr.ok) throw new HttpError(502, 'Google rechazó el código: ' + (t.error_description || t.error));
-    if (!(t.scope || '').includes('drive.file'))
-      throw new HttpError(400, 'Hay que aceptar el permiso de Drive para poder guardar archivos.');
-    if (!t.refresh_token)
-      throw new HttpError(400, 'Google no entregó refresh token. Quitá el acceso de Aljibe en myaccount.google.com/permissions y reconectá.');
-
-    const ui = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { Authorization: 'Bearer ' + t.access_token },
-    })).json();
-    const email = String(ui.email || '').toLowerCase();
-    if (!email) throw new HttpError(502, 'No se pudo leer el email de la cuenta');
-
-    const other = await env.DB.prepare('SELECT user_id FROM accounts WHERE email=?').bind(email).first();
-    if (other && other.user_id !== user.id)
-      throw new HttpError(409, 'Esa cuenta de Google ya está conectada a otro usuario de Aljibe');
-
-    const root = await ensureRootFolder(t.access_token);
-    await env.DB.prepare(
-      `INSERT INTO accounts (user_id, email, refresh_token, root_folder_id, created_at) VALUES (?,?,?,?,?)
-       ON CONFLICT(email) DO UPDATE SET refresh_token=excluded.refresh_token, root_folder_id=excluded.root_folder_id`
-    ).bind(user.id, email, await encrypt(env, t.refresh_token), root, now()).run();
-    tokenCache.clear();
-    return back('connected=' + encodeURIComponent(email));
+    const [m, nonce, exp, extra, sig] = (url.searchParams.get('state') || '').split('.');
+    mode = m;
+    if (!sig || (m !== 'l' && m !== 'c') || Number(exp) < now() || !(await verifySig(env, `${m}:${nonce}.${exp}.${extra}`, sig)))
+      throw new HttpError(400, 'El acceso venció o no es válido. Probá de nuevo.');
+    if (m === 'c') {
+      if (!user) throw new HttpError(401, 'Tu sesión venció. Entrá de nuevo.');
+      if (String(user.id) !== extra) throw new HttpError(400, 'El acceso no es válido. Probá de nuevo.');
+      const { t, email } = await exchange(env, url);
+      if (!(await saveAccount(env, user.id, email, t)))
+        throw new HttpError(409, 'Esa cuenta de Google ya está conectada a otro usuario de Aljibe');
+      return to('connected=' + encodeURIComponent(email));
+    }
+    // modo entrar
+    if (readCookies(req).aljibe_st !== nonce) throw new HttpError(400, 'El acceso no es válido o se abrió en otro navegador. Probá de nuevo.');
+    const { t, email } = await exchange(env, url);
+    let u = await env.DB.prepare('SELECT id, email, is_admin FROM users WHERE email=?').bind(email).first();
+    let welcome = false;
+    if (!u) {
+      const code = extra === '-' ? '' : extra;
+      let isAdmin = 0, invite = null;
+      if (env.ADMIN_CODE && code && (await codeEq(code, env.ADMIN_CODE))) {
+        const a = await env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE is_admin=1').first();
+        if (a.n > 0) throw new HttpError(403, 'Ya existe un administrador. Pedile una invitación.');
+        isAdmin = 1;
+      } else {
+        invite = code ? await env.DB.prepare('SELECT * FROM invites WHERE code=?').bind(code).first() : null;
+        if (!invite || invite.used_by || invite.expires_at < now())
+          throw new HttpError(403, 'Esa cuenta de Google todavía no tiene acceso a Aljibe. Pedí una invitación a quien administra.');
+      }
+      const owner = await env.DB.prepare('SELECT user_id FROM accounts WHERE email=?').bind(email).first();
+      if (owner) throw new HttpError(409, 'Esa cuenta de Google ya está conectada a otro usuario de Aljibe');
+      let r;
+      try {
+        r = await env.DB.prepare("INSERT INTO users (email, pw, is_admin, created_at) VALUES (?,'google',?,?)").bind(email, isAdmin, now()).run();
+      } catch { throw new HttpError(409, 'Ya existe un usuario con ese email'); }
+      u = { id: r.meta.last_row_id, email, is_admin: isAdmin };
+      if (invite) { // la invitación se consume de forma atómica
+        const c = await env.DB.prepare('UPDATE invites SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL').bind(u.id, now(), invite.code).run();
+        if (c.meta.changes !== 1) {
+          await env.DB.prepare('DELETE FROM users WHERE id=?').bind(u.id).run();
+          throw new HttpError(403, 'La invitación ya fue usada');
+        }
+      }
+      welcome = true;
+    }
+    await saveAccount(env, u.id, email, t); // si esa cuenta es de otro usuario, simplemente no se toca
+    return to(welcome ? 'welcome=1' : '', [await sessionCookie(env, u), stateCookie('', 0)]);
   } catch (e) {
-    return back('error=' + encodeURIComponent(e.message));
+    return to('error=' + encodeURIComponent(e.message), mode === 'l' ? [stateCookie('', 0)] : []);
   }
 }
 
@@ -803,21 +767,16 @@ async function route(ctx) {
   const readBody = () => request.clone().json().catch(() => ({}));
 
   // Rutas públicas
-  if (path === 'register' && m === 'POST') return register(env, await readBody());
-  if (path === 'login' && m === 'POST') return login(env, await readBody());
+  if (path === 'google/login' && m === 'GET') return googleLogin(env, url);
   if (path === 'logout' && m === 'POST')
     return json({ ok: true }, 200, { 'Set-Cookie': 'aljibe=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0' });
 
   const user = await getUser(request, env);
-  if (path === 'google/callback' && m === 'GET' && !user)
-    return new Response(null, { status: 302, headers: { Location: '/?error=' + encodeURIComponent('Tu sesión venció. Entrá de nuevo y reconectá la cuenta.') } });
+  if (path === 'google/callback' && m === 'GET') return googleCallback(env, url, request, user);
   if (!user) throw new HttpError(401, 'No autenticado');
 
   if (path === 'me' && m === 'GET') return json({ ok: true, user: publicUser(user) });
-  if (path === 'password' && m === 'POST') return changePassword(env, user, await readBody());
-
   if (path === 'google/connect' && m === 'GET') return googleConnect(env, url, user);
-  if (path === 'google/callback' && m === 'GET') return googleCallback(env, url, user);
 
   if (path === 'accounts' && m === 'GET') return listAccounts(env, user, url);
   if (seg[0] === 'accounts' && seg[1] && m === 'DELETE') return deleteAccount(env, user, Number(seg[1]));
@@ -842,7 +801,6 @@ async function route(ctx) {
   if (seg[0] === 'admin') {
     needAdmin(user);
     if (path === 'admin/users' && m === 'GET') return adminUsers(env);
-    if (seg[1] === 'users' && seg[2] && seg[3] === 'reset' && m === 'POST') return adminResetPassword(env, user, Number(seg[2]));
     if (seg[1] === 'users' && seg[2] && m === 'DELETE') return adminDeleteUser(env, user, Number(seg[2]));
     if (path === 'admin/invites' && m === 'GET') return adminInvites(env);
     if (path === 'admin/invites' && m === 'POST') return adminCreateInvite(env, user, await readBody());
