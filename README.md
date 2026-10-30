@@ -13,6 +13,8 @@ Pensado para un **grupo chico de gente conocida**: cada persona entra **solo con
 - Permiso mínimo de Google (`drive.file`): Aljibe solo ve lo que ella misma creó, no el resto de tu Drive.
 - **Reindexar**: cada parte guarda en Drive los datos para reconstruirla. Si se pierde la base D1, un botón recupera archivos y carpetas virtuales leyendo los Drives (con el nombre y la carpeta que tenían **al subirse**; los cambios hechos después con Renombrar/Mover solo viven en D1).
 - **Varios usuarios con invitación.** Datos completamente separados: nadie ve ni toca los archivos, carpetas o cuentas de otro. Una cuenta de Google solo puede estar conectada a un usuario.
+- **Compartir por enlace:** cada archivo (también los partidos en varias cuentas) puede tener un enlace público con vencimiento (1 a 90 días) que se puede desactivar. Hay un solo enlace por archivo: crear otro anula el anterior.
+- **Equilibrar:** reparte lo ya guardado entre las cuentas para que queden parejas (mueve partes de la cuenta con menos espacio libre a la que más tiene). Copia por bloques de 8 MB, es reanudable y solo borra la original cuando la copia está completa.
 - **Todo bajo Google:** se entra con «Continuar con Google». La cuenta con la que entrás queda conectada como primer almacenamiento; después sumás más con «+ Conectar cuenta». No hay contraseñas de Aljibe que recordar ni que robar.
 - Panel de administración: crear invitaciones (de un solo uso, vencen a los 7 días), ver usuarios y su uso, quitar usuarios.
 - El inicio de sesión va atado al navegador (cookie temporal + `state` firmado) y la sesión dura 30 días.
@@ -36,7 +38,13 @@ Subí estos archivos a un repositorio, **en la raíz** (que queden `public/`, `f
 ### 2. Crear la base D1
 Cloudflare → **Workers & Pages → D1 → Create database** (nombre: `aljibe`).
 Abrí la pestaña **Console**, pegá el contenido de `schema.sql` y ejecutalo. Si no acepta todo junto, pegá las sentencias de a una (cada `CREATE TABLE` / `CREATE INDEX` es una).
-Comprobá con `SELECT name FROM sqlite_master WHERE type='table';`: tienen que aparecer `users`, `invites`, `accounts`, `files`, `parts` y `folders`.
+Comprobá con `SELECT name FROM sqlite_master WHERE type='table';`: tienen que aparecer `users`, `invites`, `accounts`, `files`, `parts`, `folders`, `shares` y `moves`.
+
+**Si venís de una versión anterior (v0.2/v0.3):** alcanza con crear las dos tablas nuevas. Pegá estas dos líneas en la consola de D1 (de a una si hace falta):
+```sql
+CREATE TABLE IF NOT EXISTS shares ( token TEXT PRIMARY KEY, file_id TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL );
+CREATE TABLE IF NOT EXISTS moves ( file_id TEXT NOT NULL, idx INTEGER NOT NULL, to_account INTEGER NOT NULL, session_url TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (file_id, idx) );
+```
 
 ### 3. Crear el proyecto en Pages
 Cloudflare → **Workers & Pages → Create → Pages → Connect to Git** → elegí el repo.
@@ -112,6 +120,9 @@ La próxima vez que entres con `nueva@gmail.com` serás el administrador y se co
 
 ## Límites a tener presentes
 
+- **Enlaces para compartir:** la descarga pasa por Cloudflare y cuenta para el límite diario de peticiones del plan gratis (cada bloque de descarga es una petición). Sirve para compartir con pocas personas, no para repartir a mucha gente. Quien tenga el enlace puede descargar; no se puede restringir por persona.
+- **Equilibrar** es lento con archivos grandes (todo pasa por Cloudflare, bloque a bloque) y hay que dejar la pestaña abierta; si se corta, se vuelve a tocar el botón y retoma. No equilibra el espacio que usan Gmail o Fotos, solo lo que guardó Aljibe.
+
 - **Plan gratis de Cloudflare:** según su documentación, cada petición tiene **10 ms de CPU**, hay un tope de **100.000 peticiones por día** y **50 subpeticiones** por invocación. Cada bloque de 8 MB es una petición: subir 100 GB son unas 12.800.
 - **Sin hash de contraseñas:** al no haber contraseñas propias, desaparece lo más pesado en CPU.
 - **Cuota de Drive:** los 15 GB de cada cuenta se comparten con Gmail y Fotos. Aljibe lee la cuota real, así que ya lo descuenta.
@@ -121,4 +132,4 @@ La próxima vez que entres con `nueva@gmail.com` serás el administrador y se co
 - Las reglas de Google sobre crear cuentas solo para juntar espacio no son claras; usalo con cuentas propias.
 
 ## Ideas para la próxima versión
-Cifrado en el cliente, redundancia (copia en dos cuentas), sincronización automática con un cron, subida de carpetas completas, y cuotas por usuario.
+Cifrado en el cliente, redundancia (copia en dos cuentas), sincronización automática con un cron, subida de carpetas completas, cuotas por usuario y enlaces con contraseña.
