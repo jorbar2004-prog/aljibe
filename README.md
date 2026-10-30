@@ -2,7 +2,7 @@
 
 Un panel que junta varias cuentas de Google Drive en una sola. Subís un archivo y Aljibe elige en qué cuenta guardarlo; si no entra entero en ninguna, lo parte y reparte los trozos entre varias. Al descargar los vuelve a unir en streaming.
 
-Pensado para un **grupo chico de gente conocida**: cada persona tiene su usuario y conecta *sus propias* cuentas de Google. El administrador reparte invitaciones.
+Pensado para un **grupo chico de gente conocida**: cada persona entra **solo con su cuenta de Google** (sin contraseñas propias) y conecta *sus propias* cuentas de Drive. El administrador reparte invitaciones.
 
 **Stack:** un solo `public/index.html` + una Pages Function (`functions/api/[[path]].js`) + D1 (SQLite) en Cloudflare. Sin servidor propio.
 
@@ -13,8 +13,9 @@ Pensado para un **grupo chico de gente conocida**: cada persona tiene su usuario
 - Permiso mínimo de Google (`drive.file`): Aljibe solo ve lo que ella misma creó, no el resto de tu Drive.
 - **Reindexar**: cada parte guarda en Drive los datos para reconstruirla. Si se pierde la base D1, un botón recupera archivos y carpetas virtuales leyendo los Drives (con el nombre y la carpeta que tenían **al subirse**; los cambios hechos después con Renombrar/Mover solo viven en D1).
 - **Varios usuarios con invitación.** Datos completamente separados: nadie ve ni toca los archivos, carpetas o cuentas de otro. Una cuenta de Google solo puede estar conectada a un usuario.
-- Panel de administración: crear invitaciones (de un solo uso, vencen a los 7 días), ver usuarios y su uso, generar una contraseña temporal, quitar usuarios.
-- Contraseñas con PBKDF2-SHA256 + sal, bloqueo de 15 minutos tras 5 intentos fallidos, y las sesiones se invalidan al cambiar la contraseña.
+- **Todo bajo Google:** se entra con «Continuar con Google». La cuenta con la que entrás queda conectada como primer almacenamiento; después sumás más con «+ Conectar cuenta». No hay contraseñas de Aljibe que recordar ni que robar.
+- Panel de administración: crear invitaciones (de un solo uso, vencen a los 7 días), ver usuarios y su uso, quitar usuarios.
+- El inicio de sesión va atado al navegador (cookie temporal + `state` firmado) y la sesión dura 30 días.
 - Los tokens de Google se guardan **cifrados** (AES-GCM).
 
 ## Estructura
@@ -74,16 +75,15 @@ En tu proyecto de Pages → **Settings**:
 | `SESSION_SECRET` | una cadena larga y aleatoria (mínimo 16 caracteres, mejor 40+) |
 | `GOOGLE_CLIENT_ID` | el Client ID |
 | `GOOGLE_CLIENT_SECRET` | el Client secret |
-| `PBKDF2_ITERATIONS` | *(opcional)* por defecto 100000. Ver "Límites" |
 
 Después hacé un **nuevo deploy** (Deployments → Retry deployment) para que tome las variables.
 
 > ⚠️ No cambies `SESSION_SECRET` después de que haya gente conectada: con él se cifran los tokens de Google y habría que reconectar todas las cuentas.
 
 ### 6. Crear al administrador y empezar
-1. Entrá a tu URL → pestaña **Tengo una invitación** → poné como código tu `ADMIN_CODE`, tu email y una contraseña. Esa cuenta queda como administradora.
-2. Conectá tus cuentas de Google con **+ Conectar cuenta**.
-3. Para sumar gente: en **Usuarios e invitaciones** tocá **+ Crear invitación**. Se copia un enlace; mandáselo a la persona. Al abrirlo ya aparece el formulario de registro con el código cargado.
+1. Entrá a `https://TU-URL.pages.dev/?invite=TU_ADMIN_CODE` (con tu `ADMIN_CODE` como código) y tocá **Continuar con Google**. La cuenta de Google con la que entres queda como administradora y conectada como primer almacenamiento. Solo funciona mientras no haya administrador.
+2. Sumá más cuentas tuyas con **+ Conectar cuenta**.
+3. Para sumar gente: en **Usuarios e invitaciones** tocá **+ Crear invitación** y mandá el enlace. La persona lo abre, toca *Continuar con Google* y listo. Cada vez que vuelva, entra con el mismo botón (sin invitación).
 
 ## Cómo funciona por dentro
 
@@ -103,24 +103,17 @@ Quitar a un usuario revoca el acceso de Aljibe a sus cuentas de Google y borra s
 
 ## Recuperar el acceso de administrador
 
-Si el administrador olvida su contraseña (nadie más puede restablecerla), en la consola de D1:
+No hay contraseñas que olvidar: el administrador entra con su cuenta de Google. Si perdiera el acceso a esa cuenta de Google, en la consola de D1 se puede cambiar el email del administrador por otra cuenta de Google tuya (reemplazá los emails):
 
 ```sql
-SELECT id FROM users WHERE is_admin=1;      -- anotá el número (VIEJO)
-DELETE FROM users WHERE is_admin=1;
+UPDATE users SET email='nueva@gmail.com' WHERE is_admin=1;
 ```
-Después registrate de nuevo con `ADMIN_CODE` (te da un id nuevo; anotalo como NUEVO) y ejecutá, reemplazando los números:
-```sql
-UPDATE accounts SET user_id=NUEVO WHERE user_id=VIEJO;
-UPDATE files    SET user_id=NUEVO WHERE user_id=VIEJO;
-UPDATE folders  SET user_id=NUEVO WHERE user_id=VIEJO;
-UPDATE invites  SET created_by=NUEVO WHERE created_by=VIEJO;
-```
+La próxima vez que entres con `nueva@gmail.com` serás el administrador y se conectará esa cuenta. Si querés empezar de cero como administrador: `DELETE FROM users WHERE is_admin=1;` y volvé a usar el enlace con `ADMIN_CODE` (los archivos de ese usuario dejan de estar asociados).
 
 ## Límites a tener presentes
 
 - **Plan gratis de Cloudflare:** según su documentación, cada petición tiene **10 ms de CPU**, hay un tope de **100.000 peticiones por día** y **50 subpeticiones** por invocación. Cada bloque de 8 MB es una petición: subir 100 GB son unas 12.800.
-- **Hash de contraseñas:** es lo más pesado que hace la API y ocurre solo al entrar, registrarse o cambiar la contraseña (la sesión dura 30 días). Con 100.000 iteraciones puede pasar los 10 ms del plan gratis; no pude medirlo sin desplegarlo. Si al entrar ves un error de CPU (1102), tenés dos salidas: bajar `PBKDF2_ITERATIONS` (por ejemplo a 20000, algo menos seguro) o pasar a Workers de pago (unos USD 5/mes).
+- **Sin hash de contraseñas:** al no haber contraseñas propias, desaparece lo más pesado en CPU.
 - **Cuota de Drive:** los 15 GB de cada cuenta se comparten con Gmail y Fotos. Aljibe lee la cuota real, así que ya lo descuenta.
 - **Descarga/subida pasan por Cloudflare**, así que dependen de su ancho de banda y no son tan rápidas como hablar directo con Google.
 - **Sin papelera:** borrar un archivo lo elimina de Drive de forma definitiva.
