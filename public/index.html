@@ -59,8 +59,12 @@
   }
   .login .btn { width: 100%; justify-content: center; margin-top: 12px; }
   .err { color: var(--danger); margin: 10px 0 0; min-height: 1.3em; font-size: 14px; }
-  .login .err { margin: 10px 0 0; }
+  .login .err { margin: 10px 0 0; color: var(--danger); font-weight: 600; }
   .login form input + input { margin-top: 8px; }
+  .login .note { background: var(--surface-2); border-radius: 10px; padding: 12px 14px; font-size: 14px; text-align: left; margin-bottom: 14px; }
+  .note ol { margin: 6px 0 0; padding-left: 20px; }
+  .gbtn { display: block; text-align: center; text-decoration: none; margin: 4px 0 10px; }
+  .login .hint { font-size: 13px; color: var(--muted); margin: 8px 0; }
   .tabs { display: flex; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
   .tabs button { flex: 1; border: 0; background: none; padding: 7px 8px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 600; }
   .tabs button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
@@ -159,21 +163,17 @@
   <div class="box">
     <h1>Aljibe</h1>
     <p>Tus cuentas de Drive, juntas.</p>
-    <div class="tabs">
-      <button type="button" id="tabIn" class="on">Entrar</button>
-      <button type="button" id="tabUp">Tengo una invitación</button>
+    <div id="inviteNote" class="note" hidden>
+      <strong>Te invitaron a Aljibe.</strong>
+      <ol>
+        <li>Tocá el botón e iniciá sesión con tu cuenta de Google.</li>
+        <li>Google te va a pedir permiso para que Aljibe use una carpeta propia en tu Drive.</li>
+        <li>Listo: esa cuenta ya es tu primer almacenamiento. No hay contraseñas nuevas.</li>
+      </ol>
     </div>
-    <form id="loginForm">
-      <input id="liEmail" type="email" placeholder="Email" aria-label="Email" autocomplete="username" required>
-      <input id="liPw" type="password" placeholder="Contraseña" aria-label="Contraseña" autocomplete="current-password" required>
-      <button class="btn primary" type="submit">Entrar</button>
-    </form>
-    <form id="regForm" hidden>
-      <input id="regCode" type="text" placeholder="Código de invitación" aria-label="Código de invitación" autocomplete="off" required>
-      <input id="regEmail" type="email" placeholder="Email" aria-label="Email" autocomplete="username" required>
-      <input id="regPw" type="password" placeholder="Contraseña (mínimo 8 caracteres)" aria-label="Contraseña" autocomplete="new-password" minlength="8" required>
-      <button class="btn primary" type="submit">Crear mi cuenta</button>
-    </form>
+    <a class="btn primary gbtn" id="gLogin" href="/api/google/login">Continuar con Google</a>
+    <p class="hint" id="loginHint">Si tenés una invitación, abrí el enlace que te mandaron. Si ya sos usuario, entrá con la misma cuenta de Google de siempre.</p>
+    <p class="hint">Si Google dice <em>“no verificó esta app”</em>, tocá <strong>Avanzado → Ir a Aljibe</strong>. Aljibe solo accede a la carpeta que ella misma crea, no al resto de tu Drive.</p>
     <p class="err" id="loginErr" role="alert"></p>
     <p class="legal"><a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
   </div>
@@ -188,7 +188,6 @@
     <span class="total" id="who"></span>
     <span class="total" id="total"></span>
     <button class="btn small" id="reindex" title="Reconstruye el índice leyendo lo que hay realmente en cada Drive">Reindexar</button>
-    <button class="btn small" id="chpw">Contraseña</button>
     <button class="btn small" id="logout">Salir</button>
   </header>
 
@@ -227,19 +226,6 @@
   </section>
   <p class="legal"><a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 </div>
-
-<dialog id="pwDialog">
-  <form id="pwForm">
-    <h3>Cambiar contraseña</h3>
-    <input id="pwCur" type="password" placeholder="Contraseña actual" aria-label="Contraseña actual" autocomplete="current-password" required>
-    <input id="pwNew" type="password" placeholder="Nueva contraseña (mínimo 8)" aria-label="Nueva contraseña" autocomplete="new-password" minlength="8" required>
-    <p class="err" id="pwErr" role="alert"></p>
-    <div class="dlg-actions">
-      <button class="btn" type="button" id="pwCancel">Cancelar</button>
-      <button class="btn primary" type="submit">Guardar</button>
-    </div>
-  </form>
-</dialog>
 
 <div class="queue" id="queue" hidden>
   <div class="card">
@@ -297,57 +283,29 @@ const fail = (e) => banner('bad', e.message || String(e));
 
 // ── sesión ──
 const params = new URLSearchParams(location.search);
-function setTab(t) {
-  $('#loginForm').hidden = t !== 'in'; $('#regForm').hidden = t !== 'up';
-  $('#tabIn').classList.toggle('on', t === 'in'); $('#tabUp').classList.toggle('on', t === 'up');
-  $('#loginErr').textContent = '';
-}
-$('#tabIn').onclick = () => setTab('in');
-$('#tabUp').onclick = () => setTab('up');
-function showLogin() {
+function showLogin(err) {
   $('#app').hidden = true; $('#login').hidden = false;
   const inv = params.get('invite');
-  setTab(inv ? 'up' : 'in');
-  if (inv) $('#regCode').value = inv;
+  if (inv) {
+    $('#gLogin').href = '/api/google/login?invite=' + encodeURIComponent(inv);
+    $('#inviteNote').hidden = false; $('#loginHint').hidden = true;
+  }
+  if (err) $('#loginErr').textContent = err;
 }
 async function boot() {
   let me;
-  try { me = await api('me'); } catch { return showLogin(); }
+  try { me = await api('me'); } catch { const e = params.get('error'); if (e) history.replaceState(null, '', params.get('invite') ? '/?invite=' + encodeURIComponent(params.get('invite')) : '/'); return showLogin(e); }
   state.user = me.user;
   $('#login').hidden = true; $('#app').hidden = false;
   $('#who').textContent = me.user.email;
   $('#admin').hidden = !me.user.is_admin;
+  if (params.get('welcome')) banner('ok', '¡Bienvenido a Aljibe! Tu cuenta de Google ya está conectada. Podés subir archivos o sumar más cuentas con “+ Conectar cuenta”.');
   if (params.get('connected')) banner('ok', 'Cuenta conectada: ' + params.get('connected'));
   if (params.get('error')) banner('bad', params.get('error'));
   if (params.toString()) { history.replaceState(null, '', '/'); for (const k of [...params.keys()]) params.delete(k); }
   await Promise.all([loadAccounts(), loadTree(), loadAdmin()]);
 }
-$('#loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); $('#loginErr').textContent = '';
-  try {
-    await api('login', { method: 'POST', json: { email: $('#liEmail').value, password: $('#liPw').value } });
-    $('#liPw').value = ''; boot();
-  } catch (err) { $('#loginErr').textContent = err.message; }
-});
-$('#regForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); $('#loginErr').textContent = '';
-  try {
-    await api('register', { method: 'POST', json: { email: $('#regEmail').value, password: $('#regPw').value, code: $('#regCode').value } });
-    $('#regPw').value = ''; boot();
-  } catch (err) { $('#loginErr').textContent = err.message; }
-});
 $('#logout').onclick = async () => { await api('logout', { method: 'POST' }).catch(() => {}); location.replace('/'); };
-
-// ── cambiar contraseña ──
-$('#chpw').onclick = () => { $('#pwCur').value = ''; $('#pwNew').value = ''; $('#pwErr').textContent = ''; $('#pwDialog').showModal(); $('#pwCur').focus(); };
-$('#pwCancel').onclick = () => $('#pwDialog').close();
-$('#pwForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); $('#pwErr').textContent = '';
-  try {
-    await api('password', { method: 'POST', json: { current: $('#pwCur').value, next: $('#pwNew').value } });
-    $('#pwDialog').close(); banner('ok', 'Contraseña actualizada');
-  } catch (err) { $('#pwErr').textContent = err.message; }
-});
 
 // ── administración ──
 async function loadAdmin() {
@@ -364,7 +322,6 @@ function renderUsers(users) {
       h('div', { class: 'nm' }, u.email, u.is_admin ? h('span', { class: 'tag' }, 'admin') : null,
         h('div', { class: 'where' }, `${u.naccounts} ${u.naccounts === 1 ? 'cuenta' : 'cuentas'} · ${u.nfiles} ${u.nfiles === 1 ? 'archivo' : 'archivos'} · ${fmtSize(u.bytes)}`)),
       h('div', { class: 'acts' }, u.id === state.user.id ? null : [
-        h('button', { class: 'btn small', onclick: () => resetUser(u) }, 'Nueva contraseña'),
         h('button', { class: 'btn small danger', onclick: () => removeUser(u) }, 'Quitar')])));
   }
 }
@@ -400,13 +357,6 @@ $('#newInvite').onclick = async () => {
 };
 async function delInvite(code) {
   try { await api('admin/invites/' + encodeURIComponent(code), { method: 'DELETE', json: {} }); loadAdmin(); } catch (e) { fail(e); }
-}
-async function resetUser(u) {
-  if (!confirm(`¿Generar una contraseña temporal para ${u.email}? Se cierra su sesión actual.`)) return;
-  try {
-    const r = await api(`admin/users/${u.id}/reset`, { method: 'POST', json: {} });
-    banner('info', `Contraseña temporal de ${r.email}: ${r.password} — pasásela y que la cambie desde "Contraseña".`);
-  } catch (e) { fail(e); }
 }
 async function removeUser(u) {
   if (!confirm(`¿Quitar a ${u.email}? Se borran sus datos de Aljibe y se revoca el acceso a sus cuentas de Google. Los archivos que guardó siguen en sus propios Drives (carpeta "Aljibe").`)) return;
@@ -520,7 +470,7 @@ async function moveFile(f) {
 }
 async function delFile(f) {
   if (!confirm(`¿Borrar “${f.name}”? Se elimina también de Google Drive (no hay papelera).`)) return;
-  try { await api('files/' + f.id, { method: 'DELETE', json: {} }); loadTree(); loadAccounts(true); } catch (e) { fail(e); }
+  try { await api('files/' + f.id, { method: 'DELETE', json: {} }); loadTree(); loadAccounts(true); loadAdmin(); } catch (e) { fail(e); }
 }
 async function delFolder(p) {
   try { await api('folders', { method: 'DELETE', json: { path: p } }); loadTree(); } catch (e) { fail(e); }
@@ -581,7 +531,7 @@ async function pump() {
     it.state = 'run';
     try { await uploadOne(it); it.state = 'done'; it.msg.textContent = 'Listo'; it.fill.style.width = '100%'; it.pct.textContent = '100%'; }
     catch (e) { it.state = 'error'; it.el.classList.add('error'); it.msg.textContent = e.message; }
-    await loadTree(); loadAccounts();
+    await loadTree(); loadAccounts(); loadAdmin();
   }
   working = false;
 }
