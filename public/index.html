@@ -80,8 +80,13 @@
   dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: min(340px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.45); }
   dialog h3 { margin: 0 0 12px; }
+  dialog { width: min(420px, calc(100vw - 32px)); }
+  dialog select, dialog #shLink { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+  dialog .hint { color: var(--muted); font-size: 13px; margin: 6px 0; overflow-wrap: anywhere; }
+  .pbar { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin: 10px 0 4px; }
+  .pbar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
   dialog input + input { margin-top: 8px; }
-  .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .dlg-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
   /* cabecera */
   header.top { display: flex; align-items: center; gap: 12px; padding: 18px 0 10px; flex-wrap: wrap; }
@@ -196,6 +201,7 @@
   <section class="card">
     <div class="card-head">
       <h2>Cuentas de Google</h2>
+      <button class="btn small" id="rebalance" title="Reparte lo ya guardado para que las cuentas queden parejas">Equilibrar</button>
       <button class="btn small" id="refreshAcc">Actualizar cuotas</button>
       <a class="btn small primary" href="/api/google/connect">+ Conectar cuenta</a>
     </div>
@@ -226,6 +232,34 @@
   </section>
   <p class="legal"><a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 </div>
+
+<dialog id="shareDialog">
+  <h3 id="shTitle">Compartir</h3>
+  <p class="hint" id="shInfo"></p>
+  <div id="shLinkBox" hidden>
+    <input id="shLink" type="text" readonly aria-label="Enlace para compartir">
+    <div class="dlg-actions"><button class="btn small" id="shCopy">Copiar enlace</button></div>
+    <p class="hint" id="shExp"></p>
+  </div>
+  <label class="hint" for="shDays">Vence en</label>
+  <select id="shDays"><option value="1">1 día</option><option value="7" selected>7 días</option><option value="30">30 días</option><option value="90">90 días</option></select>
+  <div class="dlg-actions">
+    <button class="btn danger" id="shStop" hidden>Dejar de compartir</button>
+    <button class="btn" id="shClose">Cerrar</button>
+    <button class="btn primary" id="shMake">Crear enlace</button>
+  </div>
+</dialog>
+
+<dialog id="balDialog">
+  <h3>Equilibrar cuentas</h3>
+  <p class="hint" id="balInfo"></p>
+  <div class="pbar" id="balBar" hidden><div id="balFill"></div></div>
+  <p class="hint" id="balMsg"></p>
+  <div class="dlg-actions">
+    <button class="btn" id="balCancel">Cancelar</button>
+    <button class="btn primary" id="balGo">Empezar</button>
+  </div>
+</dialog>
 
 <div class="queue" id="queue" hidden>
   <div class="card">
@@ -306,6 +340,105 @@ async function boot() {
   await Promise.all([loadAccounts(), loadTree(), loadAdmin()]);
 }
 $('#logout').onclick = async () => { await api('logout', { method: 'POST' }).catch(() => {}); location.replace('/'); };
+
+
+// ── compartir ──
+const sharedNow = (f) => f.share_token && f.share_exp > Date.now() / 1000;
+const shareUrl = (t) => location.origin + '/api/s/' + t;
+let shareTarget = null;
+function shareFile(f) {
+  shareTarget = f;
+  $('#shTitle').textContent = 'Compartir «' + (f.name.length > 40 ? f.name.slice(0, 37) + '…' : f.name) + '»';
+  paintShare();
+  $('#shareDialog').showModal();
+}
+function paintShare() {
+  const f = state.files.find((x) => x.id === shareTarget.id) || shareTarget;
+  const on = sharedNow(f);
+  $('#shLinkBox').hidden = !on; $('#shStop').hidden = !on;
+  $('#shMake').textContent = on ? 'Crear uno nuevo' : 'Crear enlace';
+  $('#shInfo').textContent = on
+    ? 'Cualquiera que tenga este enlace puede descargar el archivo, sin cuenta. Si creás uno nuevo, el anterior deja de funcionar.'
+    : 'Se genera un enlace que cualquiera puede abrir para descargar este archivo, sin cuenta, hasta que venza o lo desactives.';
+  if (on) { $('#shLink').value = shareUrl(f.share_token); $('#shExp').textContent = 'Vence el ' + fmtDate(f.share_exp) + '.'; }
+}
+$('#shClose').onclick = () => $('#shareDialog').close();
+$('#shCopy').onclick = async () => {
+  const el = $('#shLink');
+  try { await navigator.clipboard.writeText(el.value); $('#shCopy').textContent = '¡Copiado!'; }
+  catch { el.select(); $('#shCopy').textContent = 'Seleccionado: Ctrl+C'; }
+  setTimeout(() => { $('#shCopy').textContent = 'Copiar enlace'; }, 2000);
+};
+$('#shMake').onclick = async () => {
+  try {
+    const r = await api('files/' + shareTarget.id + '/share', { method: 'POST', json: { days: Number($('#shDays').value) } });
+    const f = state.files.find((x) => x.id === shareTarget.id); if (f) { f.share_token = r.token; f.share_exp = r.expires_at; }
+    paintShare(); renderList(); $('#shCopy').click();
+  } catch (e) { fail(e); }
+};
+$('#shStop').onclick = async () => {
+  try {
+    await api('files/' + shareTarget.id + '/share', { method: 'DELETE', json: {} });
+    const f = state.files.find((x) => x.id === shareTarget.id); if (f) { f.share_token = null; f.share_exp = null; }
+    paintShare(); renderList();
+  } catch (e) { fail(e); }
+};
+
+// ── equilibrar ──
+let balPlan = null, balStop = false, balBusy = false;
+$('#rebalance').onclick = async () => {
+  try {
+    const p = await api('rebalance/plan', { method: 'POST', json: {} });
+    if (!p.moves.length) return banner('info', 'Las cuentas ya están parejas: no hay nada que mover.');
+    balPlan = p; balStop = false;
+    const byDest = new Map();
+    for (const m of p.moves) { const k = m.from + ' → ' + m.to_email; byDest.set(k, (byDest.get(k) || 0) + m.size); }
+    $('#balInfo').textContent = `Se van a mover ${p.moves.length} ${p.moves.length === 1 ? 'parte' : 'partes'} (${fmtSize(p.bytes)}): ` +
+      [...byDest].map(([k, v]) => `${k} (${fmtSize(v)})`).join('; ') + '. Cada parte se copia y recién después se borra la original, así que no se pierde nada si se corta. Dejá esta pestaña abierta; con archivos grandes puede tardar.';
+    $('#balBar').hidden = true; $('#balMsg').textContent = ''; $('#balGo').hidden = false; $('#balGo').disabled = false;
+    $('#balCancel').textContent = 'Cancelar';
+    $('#balDialog').showModal();
+  } catch (e) { fail(e); }
+};
+$('#balCancel').onclick = () => { if (balBusy) { balStop = true; $('#balMsg').textContent = 'Frenando al terminar el bloque actual…'; } else $('#balDialog').close(); };
+$('#balDialog').addEventListener('cancel', (e) => { if (balBusy) e.preventDefault(); });
+$('#balGo').onclick = async () => {
+  balBusy = true; balStop = false;
+  $('#balGo').disabled = true; $('#balBar').hidden = false; $('#balCancel').textContent = 'Frenar';
+  const total = balPlan.bytes; let doneBytes = 0, ok = 0, warn = 0;
+  const paint = (extra, msg) => { $('#balFill').style.width = Math.min(100, (100 * (doneBytes + extra)) / total) + '%'; if (msg) $('#balMsg').textContent = msg; };
+  try {
+    for (let i = 0; i < balPlan.moves.length && !balStop; i++) {
+      const m = balPlan.moves[i];
+      const label = `Parte ${i + 1} de ${balPlan.moves.length} · ${m.name}`;
+      let st = await api('move/start', { method: 'POST', json: { file: m.file, idx: m.idx, to: m.to } });
+      let next = st.next, tries = 0, fin = null;
+      while (!balStop && !fin) {
+        const end = Math.min(next + st.block, st.size);
+        paint(next, `${label} · ${Math.round((100 * next) / st.size)}%`);
+        try {
+          const r = await api(`move/block?file=${encodeURIComponent(m.file)}&idx=${m.idx}&start=${next}&end=${end}`, { method: 'PUT' });
+          tries = 0;
+          if (r.done) fin = r; else next = r.next;
+        } catch (e) {
+          if (++tries > 3) throw e;
+          await new Promise((res) => setTimeout(res, 1500 * tries));
+          st = await api('move/start', { method: 'POST', json: { file: m.file, idx: m.idx, to: m.to } }); // retoma donde quedó
+          if (st.done) fin = st; else next = st.next;
+        }
+      }
+      if (fin) { doneBytes += m.size; ok++; if (fin.deleted === false) warn++; paint(0); }
+    }
+    $('#balDialog').close();
+    banner(balStop ? 'info' : 'ok', `${balStop ? 'Frenado. ' : ''}Se movieron ${ok} de ${balPlan.moves.length} partes.` +
+      (warn ? ` En ${warn} no se pudo borrar la copia original de Drive; quedó duplicada (se puede borrar a mano desde la carpeta «Aljibe»).` : ''));
+  } catch (e) {
+    $('#balMsg').textContent = 'Se cortó: ' + e.message + ' Lo ya movido está a salvo; podés volver a tocar Equilibrar para seguir.';
+    $('#balCancel').textContent = 'Cerrar'; $('#balGo').hidden = true;
+  } finally {
+    balBusy = false; loadAccounts(true); loadTree(); loadAdmin();
+  }
+};
 
 // ── administración ──
 async function loadAdmin() {
@@ -449,11 +582,13 @@ function fileRow(f, showPath) {
       f.status === 'uploading' ? h('span', { class: 'tag' }, 'subiendo') : null,
       f.status === 'incomplete' ? h('span', { class: 'tag' }, 'incompleto') : null,
       f.nparts > 1 ? h('span', { class: 'tag', title: 'Repartido en varias cuentas' }, f.nparts + ' partes') : null,
+      sharedNow(f) ? h('span', { class: 'tag', title: 'Tiene un enlace activo' }, 'compartido') : null,
       showPath ? h('div', { class: 'where' }, f.folder || 'Inicio') : null),
     h('div', { class: 'meta' }, fmtSize(f.size)),
     h('div', { class: 'acts' },
       ready ? h('a', { class: 'btn small', href: dl }, 'Descargar') : null,
       ready ? h('a', { class: 'btn small', href: dl + '?inline=1', target: '_blank', rel: 'noopener' }, 'Ver') : null,
+      ready ? h('button', { class: 'btn small', onclick: () => shareFile(f) }, 'Compartir') : null,
       h('button', { class: 'btn small', onclick: () => renameFile(f) }, 'Renombrar'),
       h('button', { class: 'btn small', onclick: () => moveFile(f) }, 'Mover'),
       h('button', { class: 'btn small danger', onclick: () => delFile(f) }, 'Borrar')));
