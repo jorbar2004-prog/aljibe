@@ -7,3 +7,5 @@ CREATE TABLE IF NOT EXISTS folders ( user_id INTEGER NOT NULL, path TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id, folder);
 CREATE INDEX IF NOT EXISTS idx_parts_account ON parts(account_id);
 CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id);
+CREATE TABLE IF NOT EXISTS shares ( token TEXT PRIMARY KEY, file_id TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL );
+CREATE TABLE IF NOT EXISTS moves ( file_id TEXT NOT NULL, idx INTEGER NOT NULL, to_account INTEGER NOT NULL, session_url TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (file_id, idx) );
