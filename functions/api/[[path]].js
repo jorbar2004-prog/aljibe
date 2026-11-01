@@ -1,4 +1,4 @@
-// Aljibe v0.4 — API multiusuario (Cloudflare Pages Function, atiende todo /api/*)
+// Aljibe v0.5 — API multiusuario (Cloudflare Pages Function, atiende todo /api/*)
 // Bindings / variables necesarias: DB (D1), ADMIN_CODE, SESSION_SECRET,
 // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
 
@@ -692,6 +692,86 @@ async function moveBlock(env, user, url) {
   throw new HttpError(502, `Drive respondió ${r.status} al copiar el bloque`);
 }
 
+// ───────────── importar desde Drive ─────────────
+// El navegador abre el selector de archivos de Google con un token de la cuenta elegida (permiso drive.file: solo ve
+// lo que la persona marca). Después Aljibe lee esos archivos de Drive y los sube a su propio almacenamiento
+// bloque a bloque, igual que una subida normal. Si se pidió, al final manda el original a la papelera.
+async function ownAccount(env, user, id) {
+  const acc = await env.DB.prepare('SELECT * FROM accounts WHERE id=? AND user_id=?').bind(Number(id), user.id).first();
+  if (!acc) throw new HttpError(404, 'La cuenta no existe');
+  return acc;
+}
+
+function importConfig(env) {
+  const appId = String(env.GOOGLE_CLIENT_ID || '').split('-')[0]; // el número de proyecto es el prefijo del Client ID
+  return json({ enabled: !!(env.GOOGLE_API_KEY && /^\d+$/.test(appId)), apiKey: env.GOOGLE_API_KEY || null, appId });
+}
+
+async function importToken(env, user, body) {
+  const acc = await ownAccount(env, user, body.account);
+  return json({ token: await accessToken(env, acc), email: acc.email });
+}
+
+async function importInfo(env, user, body) {
+  const acc = await ownAccount(env, user, body.account);
+  const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).filter((x) => /^[A-Za-z0-9_-]{10,80}$/.test(x)).slice(0, 40);
+  if (!ids.length) throw new HttpError(400, 'No se eligió ningún archivo');
+  const mine = new Set((await env.DB.prepare(
+    `SELECT p.drive_id FROM parts p JOIN accounts a ON a.id=p.account_id WHERE a.user_id=? AND p.drive_id IS NOT NULL`).bind(user.id).all()).results.map((r) => r.drive_id));
+  const files = await Promise.all(ids.map(async (id) => {
+    try {
+      const r = await drive(env, acc, `/files/${id}?fields=id,name,size,mimeType,trashed,appProperties`);
+      if (!r.ok) return { id, error: r.status === 404 || r.status === 403 ? 'Aljibe no tiene acceso a ese archivo' : `Drive respondió ${r.status}` };
+      const f = await r.json();
+      if (f.trashed) return { id, name: f.name, error: 'Está en la papelera' };
+      if (mine.has(id) || f.appProperties?.aljibe) return { id, name: f.name, error: 'Ya es un archivo de Aljibe' };
+      if (String(f.mimeType).startsWith('application/vnd.google-apps')) return { id, name: f.name, error: 'Es un documento de Google (Docs, Sheets…): no se puede importar tal cual' };
+      const size = Number(f.size);
+      if (!Number.isSafeInteger(size) || size <= 0) return { id, name: f.name, error: 'Está vacío' };
+      return { id, name: f.name, size, mime: f.mimeType || 'application/octet-stream' };
+    } catch (e) { return { id, error: e.message }; }
+  }));
+  return json({ files });
+}
+
+// Copia un bloque del archivo de Drive (origen) a la sesión de subida de la parte (destino).
+async function importBlock(env, user, url) {
+  const q = url.searchParams;
+  const fileId = q.get('file'), idx = Number(q.get('idx'));
+  const start = Number(q.get('start')), end = Number(q.get('end')); // relativos a la parte, end exclusivo
+  const src = String(q.get('src') || '');
+  if (!/^[A-Za-z0-9_-]{10,80}$/.test(src)) throw new HttpError(400, 'Origen inválido');
+  const acc = await ownAccount(env, user, q.get('acct'));
+  const part = await ownPart(env, user, fileId, idx);
+  if (!part) throw new HttpError(404, 'Parte no encontrada');
+  if (part.drive_id) return json({ done: true, drive_id: part.drive_id });
+  if (!part.session_url) throw new HttpError(409, 'La sesión de subida ya no existe');
+  if (!(start >= 0 && end > start && end <= part.size && end - start <= BLOCK)) throw new HttpError(400, 'Rango inválido');
+  const prev = await env.DB.prepare('SELECT COALESCE(SUM(size),0) AS n FROM parts WHERE file_id=? AND idx<?').bind(fileId, idx).first();
+  const from = prev.n + start, to = prev.n + end - 1; // posición dentro del archivo original
+
+  const g = await drive(env, acc, `/files/${src}?alt=media`, { headers: { Range: `bytes=${from}-${to}` } });
+  if (!g.ok) throw new HttpError(502, `Drive respondió ${g.status} al leer el archivo original`);
+  const data = await g.arrayBuffer();
+  if (data.byteLength !== end - start) throw new HttpError(502, 'Drive devolvió un bloque incompleto');
+  return pushBlock(env, part, fileId, idx, start, end, data);
+}
+
+// Manda el original a la papelera, solo si la copia en Aljibe ya está lista y del mismo tamaño.
+async function importTrash(env, user, body) {
+  const acc = await ownAccount(env, user, body.account);
+  const src = String(body.src || '');
+  if (!/^[A-Za-z0-9_-]{10,80}$/.test(src)) throw new HttpError(400, 'Origen inválido');
+  const f = await env.DB.prepare("SELECT id, size FROM files WHERE id=? AND user_id=? AND status='ready'").bind(String(body.file), user.id).first();
+  if (!f) throw new HttpError(409, 'La copia en Aljibe todavía no está lista');
+  if (await env.DB.prepare('SELECT 1 FROM parts WHERE drive_id=?').bind(src).first()) throw new HttpError(400, 'Ese archivo es parte de Aljibe');
+  const meta = await drive(env, acc, `/files/${src}?fields=size`);
+  if (!meta.ok || Number((await meta.json()).size) !== f.size) return json({ trashed: false, reason: 'El tamaño del original no coincide con la copia; no se tocó.' });
+  const r = await drive(env, acc, `/files/${src}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+  if (!r.ok) return json({ trashed: false, reason: `Drive no permitió mandarlo a la papelera (${r.status}). Podés borrarlo a mano.` });
+  return json({ trashed: true });
+}
+
 // ───────────── subida ─────────────
 async function initSession(env, acc, m) {
   const token = await accessToken(env, acc);
@@ -795,6 +875,11 @@ async function uploadBlock(request, env, user, url) {
 
   const data = await request.arrayBuffer();
   if (data.byteLength !== end - start) throw new HttpError(400, 'El tamaño del bloque no coincide con el rango');
+  return pushBlock(env, part, fileId, idx, start, end, data);
+}
+
+// Envía un bloque a la sesión de subida reanudable de Google (lo usan la subida y la importación).
+async function pushBlock(env, part, fileId, idx, start, end, data) {
   const r = await fetch(part.session_url, {
     method: 'PUT',
     headers: { 'Content-Range': `bytes ${start}-${end - 1}/${part.size}` },
@@ -964,6 +1049,11 @@ async function route(ctx) {
   if (path === 'upload/block' && m === 'PUT') return uploadBlock(request, env, user, url);
   if (path === 'upload/status' && m === 'POST') return uploadStatus(env, user, await readBody());
   if (path === 'upload/finish' && m === 'POST') return uploadFinish(env, user, await readBody());
+  if (path === 'import/config' && m === 'GET') return importConfig(env);
+  if (path === 'import/token' && m === 'POST') return importToken(env, user, await readBody());
+  if (path === 'import/info' && m === 'POST') return importInfo(env, user, await readBody());
+  if (path === 'import/block' && m === 'PUT') return importBlock(env, user, url);
+  if (path === 'import/trash' && m === 'POST') return importTrash(env, user, await readBody());
   if (path === 'rebalance/plan' && m === 'POST') return rebalancePlan(env, user);
   if (path === 'move/start' && m === 'POST') return moveStart(env, user, await readBody());
   if (path === 'move/block' && m === 'PUT') return moveBlock(env, user, url);
