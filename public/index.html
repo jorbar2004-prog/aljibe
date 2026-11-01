@@ -85,6 +85,14 @@
   dialog .hint { color: var(--muted); font-size: 13px; margin: 6px 0; overflow-wrap: anywhere; }
   .pbar { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin: 10px 0 4px; }
   .pbar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .chk { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 4px; font-size: 14px; }
+  .chk input { margin-top: 3px; }
+  #impList { max-height: 40vh; overflow: auto; margin: 6px 0; }
+  #impList .irow { display: flex; gap: 8px; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; overflow-wrap: anywhere; }
+  #impList .irow > span { flex: 1 1 50%; min-width: 0; }
+  #impList .irow > small { flex: 0 1 auto; max-width: 55%; }
+  #impList .irow small { color: var(--muted); white-space: nowrap; }
+  #impList .irow.bad small { color: var(--danger); white-space: normal; text-align: right; }
   dialog input + input { margin-top: 8px; }
   .dlg-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
@@ -222,6 +230,7 @@
     <div class="card-head">
       <h2>Archivos</h2>
       <button class="btn small" id="newFolder">Nueva carpeta</button>
+      <button class="btn small" id="importBtn" hidden title="Traer archivos que ya están en tu Drive">Importar desde Drive</button>
       <button class="btn small primary" id="pick">Subir archivos</button>
       <input type="file" id="file" multiple hidden>
     </div>
@@ -258,6 +267,31 @@
   <div class="dlg-actions">
     <button class="btn" id="balCancel">Cancelar</button>
     <button class="btn primary" id="balGo">Empezar</button>
+  </div>
+</dialog>
+
+<dialog id="impDialog">
+  <h3>Importar desde Drive</h3>
+  <div id="impStep1">
+    <p class="hint">Elegís archivos de tu Drive y Aljibe los copia a su almacenamiento. Solo accede a los que marques; no ve el resto.</p>
+    <label class="hint" for="impAcc">Cuenta de Drive donde están</label>
+    <select id="impAcc"></select>
+    <label class="chk"><input type="checkbox" id="impTrash" checked> <span>Mandar el original a la papelera de Drive cuando la copia esté lista</span></label>
+    <p class="hint">Ojo: lo que está en la papelera sigue ocupando espacio hasta que la vacíes (Drive la vacía sola a los 30 días). No se pueden importar carpetas ni documentos de Google (Docs, Sheets…).</p>
+    <div class="dlg-actions">
+      <button class="btn" id="impCancel1" type="button">Cancelar</button>
+      <button class="btn primary" id="impPick" type="button">Elegir archivos…</button>
+    </div>
+  </div>
+  <div id="impStep2" hidden>
+    <p class="hint" id="impSummary"></p>
+    <div id="impList"></div>
+    <div class="pbar" id="impBar" hidden><div id="impFill"></div></div>
+    <p class="hint" id="impMsg"></p>
+    <div class="dlg-actions">
+      <button class="btn" id="impClose" type="button">Cancelar</button>
+      <button class="btn primary" id="impGo" type="button">Importar</button>
+    </div>
   </div>
 </dialog>
 
@@ -338,6 +372,7 @@ async function boot() {
   if (params.get('error')) banner('bad', params.get('error'));
   if (params.toString()) { history.replaceState(null, '', '/'); for (const k of [...params.keys()]) params.delete(k); }
   await Promise.all([loadAccounts(), loadTree(), loadAdmin()]);
+  initImport();
 }
 $('#logout').onclick = async () => { await api('logout', { method: 'POST' }).catch(() => {}); location.replace('/'); };
 
@@ -440,6 +475,114 @@ $('#balGo').onclick = async () => {
   }
 };
 
+
+// ── importar desde Drive ──
+let imp = { cfg: null, files: [], acct: null, trash: true, busy: false, stop: false };
+async function initImport() {
+  try { imp.cfg = await api('import/config'); } catch { return; }
+  $('#importBtn').hidden = !(imp.cfg.enabled && state.accounts.length);
+}
+$('#importBtn').onclick = () => {
+  const sel = $('#impAcc'); sel.replaceChildren();
+  for (const a of state.accounts) sel.append(h('option', { value: a.id }, a.email));
+  $('#impStep1').hidden = false; $('#impStep2').hidden = true;
+  $('#impDialog').showModal();
+};
+$('#impCancel1').onclick = () => $('#impDialog').close();
+$('#impClose').onclick = () => { if (imp.busy) { imp.stop = true; $('#impMsg').textContent = 'Frenando al terminar el bloque actual…'; } else $('#impDialog').close(); };
+$('#impDialog').addEventListener('cancel', (e) => { if (imp.busy) e.preventDefault(); });
+
+function loadScript(src) {
+  return new Promise((ok, no) => {
+    if ([...document.scripts].some((x) => x.src === src)) return ok();
+    const el = document.createElement('script'); el.src = src; el.async = true; el.onload = ok; el.onerror = () => no(new Error('No se pudo cargar el selector de Google. ¿Algún bloqueador de anuncios?'));
+    document.head.append(el);
+  });
+}
+$('#impPick').onclick = async () => {
+  imp.acct = Number($('#impAcc').value); imp.trash = $('#impTrash').checked;
+  try {
+    const { token } = await api('import/token', { method: 'POST', json: { account: imp.acct } });
+    await loadScript('https://apis.google.com/js/api.js');
+    await new Promise((res) => gapi.load('picker', res));
+    $('#impDialog').close(); // el selector de Google queda detrás de un diálogo modal, así que se cierra mientras se elige
+    const view = new google.picker.DocsView(google.picker.ViewId.DOCS).setIncludeFolders(false).setSelectFolderEnabled(false);
+    new google.picker.PickerBuilder()
+      .addView(view).enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+      .setOAuthToken(token).setDeveloperKey(imp.cfg.apiKey).setAppId(imp.cfg.appId).setLocale('es')
+      .setCallback(onPicked).build().setVisible(true);
+  } catch (e) { fail(e); }
+};
+async function onPicked(data) {
+  if (data.action !== google.picker.Action.PICKED) return;
+  try {
+    const ids = data.docs.map((d) => d.id);
+    const r = await api('import/info', { method: 'POST', json: { account: imp.acct, ids } });
+    imp.files = r.files; renderImportList();
+    $('#impStep1').hidden = true; $('#impStep2').hidden = false; $('#impDialog').showModal();
+  } catch (e) { fail(e); }
+}
+function renderImportList() {
+  const ok = imp.files.filter((f) => !f.error);
+  const box = $('#impList'); box.replaceChildren();
+  for (const f of imp.files) f.row = h('div', { class: 'irow' + (f.error ? ' bad' : '') }, h('span', {}, f.name || f.id), h('small', {}, f.error || fmtSize(f.size)));
+  box.append(...imp.files.map((f) => f.row));
+  const total = ok.reduce((n, f) => n + f.size, 0);
+  $('#impSummary').textContent = ok.length
+    ? `Se van a importar ${ok.length} ${ok.length === 1 ? 'archivo' : 'archivos'} (${fmtSize(total)}) a «${state.path || 'Inicio'}»${imp.trash ? ' y los originales irán a la papelera de Drive' : ''}. Dejá esta pestaña abierta hasta que termine.`
+    : 'Ninguno de los archivos elegidos se puede importar.';
+  $('#impGo').hidden = !ok.length; $('#impGo').disabled = false; $('#impBar').hidden = true; $('#impMsg').textContent = '';
+  $('#impClose').textContent = 'Cancelar';
+}
+async function importOne(f, folder) {
+  const s = await api('upload/start', { method: 'POST', json: { name: f.name, size: f.size, folder, mime: f.mime } });
+  let base = 0;
+  for (const part of s.parts) {
+    let off = 0, tries = 0;
+    while (off < part.size) {
+      if (imp.stop) throw new Error('Frenado');
+      const end = Math.min(off + s.block, part.size);
+      try {
+        const r = await api(`import/block?file=${s.file_id}&idx=${part.idx}&start=${off}&end=${end}&acct=${imp.acct}&src=${encodeURIComponent(f.id)}`, { method: 'PUT' });
+        tries = 0; off = r.done ? part.size : (r.next ?? end);
+        f.sent = base + off; paintImport();
+      } catch (e) {
+        if (++tries > 4) throw new Error('Se cortó: ' + e.message);
+        await sleep(1200 * tries);
+        try { const st = await api('upload/status', { method: 'POST', json: { file: s.file_id, idx: part.idx } }); off = st.done ? part.size : st.next; } catch { /* se reintenta */ }
+      }
+    }
+    base += part.size;
+  }
+  await api('upload/finish', { method: 'POST', json: { file: s.file_id } });
+  if (!imp.trash) return { trashed: null };
+  try { return await api('import/trash', { method: 'POST', json: { account: imp.acct, src: f.id, file: s.file_id } }); }
+  catch (e) { return { trashed: false, reason: e.message }; }
+}
+function paintImport() {
+  const ok = imp.files.filter((f) => !f.error), total = ok.reduce((n, f) => n + f.size, 0);
+  const sent = ok.reduce((n, f) => n + (f.done ? f.size : (f.sent || 0)), 0);
+  $('#impFill').style.width = Math.min(100, (100 * sent) / total) + '%';
+}
+$('#impGo').onclick = async () => {
+  imp.busy = true; imp.stop = false;
+  $('#impGo').disabled = true; $('#impBar').hidden = false; $('#impClose').textContent = 'Frenar';
+  const ok = imp.files.filter((f) => !f.error); let n = 0, noTrash = 0, last = '';
+  for (const f of ok) {
+    if (imp.stop) break;
+    const sm = f.row.querySelector('small'); sm.textContent = 'importando…';
+    try {
+      const r = await importOne(f, state.path);
+      f.done = true; n++; sm.textContent = r.trashed === true ? 'listo · original en la papelera' : 'listo';
+      if (r.trashed === false) { noTrash++; last = r.reason || ''; sm.textContent = 'listo · original sin tocar'; }
+      paintImport();
+    } catch (e) { f.row.classList.add('bad'); sm.textContent = e.message; if (imp.stop) break; }
+  }
+  imp.busy = false; $('#impClose').textContent = 'Cerrar'; $('#impGo').hidden = true;
+  $('#impMsg').textContent = `${imp.stop ? 'Frenado. ' : ''}Se importaron ${n} de ${ok.length}.` + (noTrash ? ` En ${noTrash} no se pudo mandar el original a la papelera: ${last}` : '');
+  loadTree(); loadAccounts(true); loadAdmin();
+};
+
 // ── administración ──
 async function loadAdmin() {
   if (!state.user?.is_admin) return;
@@ -500,7 +643,7 @@ async function removeUser(u) {
 async function loadAccounts(refresh) {
   try {
     const d = await api('accounts' + (refresh ? '?refresh=1' : ''));
-    state.accounts = d.accounts; renderAccounts();
+    state.accounts = d.accounts; renderAccounts(); if (imp.cfg) $('#importBtn').hidden = !(imp.cfg.enabled && state.accounts.length);
   } catch (e) { fail(e); }
 }
 function renderAccounts() {
