@@ -15,6 +15,7 @@ Pensado para un **grupo chico de gente conocida**: cada persona entra **solo con
 - **Varios usuarios con invitación.** Datos completamente separados: nadie ve ni toca los archivos, carpetas o cuentas de otro. Una cuenta de Google solo puede estar conectada a un usuario.
 - **Compartir por enlace:** cada archivo (también los partidos en varias cuentas) puede tener un enlace público con vencimiento (1 a 90 días) que se puede desactivar. Hay un solo enlace por archivo: crear otro anula el anterior.
 - **Equilibrar:** reparte lo ya guardado entre las cuentas para que queden parejas (mueve partes de la cuenta con menos espacio libre a la que más tiene). Copia por bloques de 8 MB, es reanudable y solo borra la original cuando la copia está completa.
+- **Importar desde Drive (opcional):** abre el selector de archivos de Google, copia a Aljibe los archivos que marques (sin pedir acceso al resto del Drive) y, si se pide, manda el original a la **papelera** cuando la copia está lista y verificada. Los archivos en la papelera siguen ocupando espacio hasta que se vacía. No importa carpetas ni documentos de Google (Docs, Sheets…). Requiere el paso 7 de la puesta en marcha.
 - **Todo bajo Google:** se entra con «Continuar con Google». La cuenta con la que entrás queda conectada como primer almacenamiento; después sumás más con «+ Conectar cuenta». No hay contraseñas de Aljibe que recordar ni que robar.
 - Panel de administración: crear invitaciones (de un solo uso, vencen a los 7 días), ver usuarios y su uso, quitar usuarios.
 - El inicio de sesión va atado al navegador (cookie temporal + `state` firmado) y la sesión dura 30 días.
@@ -92,6 +93,14 @@ Después hacé un **nuevo deploy** (Deployments → Retry deployment) para que t
 1. Entrá a `https://TU-URL.pages.dev/?invite=TU_ADMIN_CODE` (con tu `ADMIN_CODE` como código) y tocá **Continuar con Google**. La cuenta de Google con la que entres queda como administradora y conectada como primer almacenamiento. Solo funciona mientras no haya administrador.
 2. Sumá más cuentas tuyas con **+ Conectar cuenta**.
 3. Para sumar gente: en **Usuarios e invitaciones** tocá **+ Crear invitación** y mandá el enlace. La persona lo abre, toca *Continuar con Google* y listo. Cada vez que vuelva, entra con el mismo botón (sin invitación).
+
+### 7. (Opcional) Activar «Importar desde Drive»
+1. En Google Cloud Console, en el mismo proyecto: **APIs y servicios → Biblioteca → Google Picker API → Habilitar**.
+2. **Credenciales → Crear credenciales → Clave de API**. Restringila: en *Restricciones de la aplicación* elegí *Sitios web* y agregá `https://TU-URL.pages.dev/*` y `https://docs.google.com/*`; en *Restricciones de API* elegí *Google Picker API*.
+3. En Cloudflare Pages → Settings → Variables: agregá `GOOGLE_API_KEY` con esa clave (no es un secreto: viaja al navegador, por eso se restringe por sitio). El número de proyecto sale solo del Client ID.
+4. Nuevo deploy. Si falta la clave, el botón simplemente no aparece.
+
+Para abrir el selector, el navegador recibe un token de acceso de la cuenta elegida (dura una hora y solo vale para `drive.file`).
 
 ## Cómo funciona por dentro
 
